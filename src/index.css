@@ -1,0 +1,123 @@
+@import url('https://fonts.googleapis.com/css2?family=Work+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 225 25% 8%;
+    --foreground: 210 20% 92%;
+
+    --card: 225 22% 11%;
+    --card-foreground: 210 20% 92%;
+
+    --popover: 225 22% 13%;
+    --popover-foreground: 210 20% 92%;
+
+    --primary: 210 100% 56%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 225 20% 16%;
+    --secondary-foreground: 210 20% 85%;
+
+    --muted: 225 18% 14%;
+    --muted-foreground: 215 15% 55%;
+
+    --accent: 38 92% 55%;
+    --accent-foreground: 225 25% 8%;
+
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 60% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 55%;
+    --warning-foreground: 225 25% 8%;
+
+    --border: 225 18% 18%;
+    --input: 225 18% 18%;
+    --ring: 210 100% 56%;
+
+    --radius: 0.625rem;
+
+    --sidebar-background: 225 25% 6%;
+    --sidebar-foreground: 210 15% 70%;
+    --sidebar-primary: 210 100% 56%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 225 20% 12%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 225 18% 14%;
+    --sidebar-ring: 210 100% 56%;
+
+    --chart-1: 210 100% 56%;
+    --chart-2: 152 60% 45%;
+    --chart-3: 38 92% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 0 72% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-card/80 backdrop-blur-xl border border-border/50;
+  }
+
+  .gradient-primary {
+    background: linear-gradient(135deg, hsl(210 100% 56%), hsl(230 80% 60%));
+  }
+
+  .gradient-accent {
+    background: linear-gradient(135deg, hsl(38 92% 55%), hsl(25 95% 55%));
+  }
+
+  .slot-available {
+    @apply bg-success/15 border border-success/30 text-success;
+  }
+
+  .slot-allocated {
+    @apply bg-primary/20 border border-primary/40 text-primary;
+  }
+
+  .slot-blocked {
+    @apply bg-destructive/15 border border-destructive/30 text-destructive;
+  }
+
+  .slot-leave {
+    @apply bg-warning/15 border border-warning/30 text-warning;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(225 18% 18%) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(225 18% 22%);
+    border-radius: 3px;
+  }
+}
