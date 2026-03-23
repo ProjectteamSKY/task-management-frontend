@@ -13,6 +13,7 @@ import Schedule from "./pages/Schedule";
 import WorkforcePlanning from "./pages/WorkforcePlanning";
 import KPISetup from "./pages/KPISetup";
 import KPIReporting from "./pages/KPIReporting";
+import MemberTasks from "./pages/MembersTask";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -31,6 +32,7 @@ const App = () => (
             <Route path="/workers" element={<Workers />} />
             <Route path="/workers/:id" element={<WorkerDetail />} />
             <Route path="/tasks" element={<Tasks />} />
+            <Route path="/member-tasks" element={<MemberTasks />} />
             <Route path="/schedule" element={<Schedule />} />
             <Route path="/kpi-setup" element={<KPISetup />} />
             <Route path="/kpi-reporting" element={<KPIReporting />} />

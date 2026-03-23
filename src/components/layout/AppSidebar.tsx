@@ -1,18 +1,51 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { DashboardIcon, KanbanIcon, WorkersIcon, TasksIcon, ScheduleIcon, PlanningIcon, MenuIcon, CloseIcon, SettingsIcon, KPISetupIcon, KPIReportIcon } from '@/components/icons/Icons';
+import {
+  DashboardIcon,
+  KanbanIcon,
+  WorkersIcon,
+  TasksIcon,
+  ScheduleIcon,
+  PlanningIcon,
+  MenuIcon,
+  CloseIcon,
+  KPISetupIcon,
+  KPIReportIcon,
+} from '@/components/icons/Icons';
+
+// Dedicated MemberTasks icon — person + task lines + check
+const MemberTasksIcon = ({ size = 18, className = '' }: { size?: number; className?: string }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.75}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <circle cx="9" cy="7" r="3" />
+    <path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" />
+    <path d="M16 3.5h5" />
+    <path d="M16 7.5h5" />
+    <path d="M16 11.5h5" />
+    <path d="M14 15.5l1.5 1.5 3-3" />
+  </svg>
+);
 
 const navItems = [
-  { label: 'Dashboard', path: '/', icon: DashboardIcon },
-  { label: 'Workforce Planning', path: '/planning', icon: PlanningIcon },
-  { label: 'Kanban Board', path: '/kanban', icon: KanbanIcon },
-  { label: 'Workers', path: '/workers', icon: WorkersIcon },
-  { label: 'Tasks', path: '/tasks', icon: TasksIcon },
-  { label: 'Schedule', path: '/schedule', icon: ScheduleIcon },
-  { label: 'KPI Setup', path: '/kpi-setup', icon: KPISetupIcon },
-  { label: 'KPI Reporting', path: '/kpi-reporting', icon: KPIReportIcon },
+  { label: 'Dashboard',          path: '/',             icon: DashboardIcon },
+  { label: 'Workforce Planning', path: '/planning',     icon: PlanningIcon },
+  { label: 'Kanban Board',       path: '/kanban',       icon: KanbanIcon },
+  { label: 'Workers',            path: '/workers',      icon: WorkersIcon },
+  { label: 'Member Tasks',       path: '/member-tasks', icon: MemberTasksIcon },
+  { label: 'Tasks',              path: '/tasks',        icon: TasksIcon },
+  { label: 'Schedule',           path: '/schedule',     icon: ScheduleIcon },
+  { label: 'KPI Setup',          path: '/kpi-setup',    icon: KPISetupIcon },
+  { label: 'KPI Reporting',      path: '/kpi-reporting',icon: KPIReportIcon },
 ];
-
 
 export default function AppSidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const location = useLocation();
@@ -55,7 +88,10 @@ export default function AppSidebar({ collapsed, onToggle }: { collapsed: boolean
               }`}
               title={collapsed ? item.label : undefined}
             >
-              <item.icon size={19} className={active ? 'text-primary' : 'text-muted-foreground group-hover:text-sidebar-accent-foreground'} />
+              <item.icon
+                size={19}
+                className={active ? 'text-primary' : 'text-muted-foreground group-hover:text-sidebar-accent-foreground'}
+              />
               {!collapsed && <span>{item.label}</span>}
             </Link>
           );
