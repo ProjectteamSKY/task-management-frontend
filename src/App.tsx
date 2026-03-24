@@ -14,6 +14,7 @@ import WorkforcePlanning from "./pages/WorkforcePlanning";
 import KPISetup from "./pages/KPISetup";
 import KPIReporting from "./pages/KPIReporting";
 import NotFound from "./pages/NotFound";
+import WorkerCompare from "./pages/Workercompare";
 
 const queryClient = new QueryClient();
 
@@ -30,6 +31,7 @@ const App = () => (
             <Route path="/kanban" element={<KanbanBoard />} />
             <Route path="/workers" element={<Workers />} />
             <Route path="/workers/:id" element={<WorkerDetail />} />
+            <Route path="/workers/compare" element={<WorkerCompare />} />
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/schedule" element={<Schedule />} />
             <Route path="/kpi-setup" element={<KPISetup />} />

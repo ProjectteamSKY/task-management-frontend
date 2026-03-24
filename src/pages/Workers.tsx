@@ -1,19 +1,18 @@
 import { useState } from 'react';
 import { workers, workerPerformance, getOverallWorkload } from '@/data/mockData';
-import { Worker } from '@/types';
 import { Link } from 'react-router-dom';
-import { SearchIcon, FilterIcon, StarIcon, PlusIcon } from '@/components/icons/Icons';
-import AddWorkerModal from '@/modal/Addworkermodal';
+import { SearchIcon, StarIcon, PlusIcon } from '@/components/icons/Icons';
+import AddWorkerModal, { WorkerFormData } from '@/modal/AddWorkerModal';
 
 const statusStyles: Record<string, string> = {
-  active: 'bg-success/15 text-success',
+  active:   'bg-success/15 text-success',
   on_leave: 'bg-warning/15 text-warning',
   inactive: 'bg-destructive/15 text-destructive',
 };
 
 export default function Workers() {
-  const [search, setSearch] = useState('');
-  const [deptFilter, setDeptFilter] = useState('all');
+  const [search,      setSearch]      = useState('');
+  const [deptFilter,  setDeptFilter]  = useState('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const departments = ['all', ...Array.from(new Set(workers.map(w => w.department)))];
@@ -26,7 +25,7 @@ export default function Workers() {
     return matchSearch && matchDept;
   });
 
-  function handleAddWorker(data: Parameters<ConstructorParameters<typeof AddWorkerModal>[0]['onSubmit']>[0]) {
+  function handleAddWorker(data: WorkerFormData) {
     // TODO: wire to your real data layer / API call here
     console.log('New worker payload:', data);
   }
@@ -40,13 +39,24 @@ export default function Workers() {
           <p className="text-muted-foreground text-sm mt-1">{workers.length} workers in the system</p>
         </div>
 
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="flex items-center gap-2 text-sm px-4 py-2 rounded-lg gradient-primary text-primary-foreground hover:opacity-90 transition-opacity font-medium"
-        >
-          <PlusIcon size={15} />
-          Add Worker
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Compare button */}
+          <Link
+            to="/workers/compare"
+            className="text-sm px-4 py-2 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/70 hover:text-foreground transition-colors font-medium"
+          >
+            Compare Workers
+          </Link>
+
+          {/* Add Worker button */}
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center gap-2 text-sm px-4 py-2 rounded-lg gradient-primary text-primary-foreground hover:opacity-90 transition-opacity font-medium"
+          >
+            <PlusIcon size={15} />
+            Add Worker
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -81,7 +91,7 @@ export default function Workers() {
       {/* Worker grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.map(worker => {
-          const perf = workerPerformance.find(p => p.workerId === worker.id);
+          const perf     = workerPerformance.find(p => p.workerId === worker.id);
           const workload = getOverallWorkload(worker.id);
 
           return (
@@ -109,11 +119,9 @@ export default function Workers() {
               <div className="mt-4">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Workload</span>
-                  <span
-                    className={`text-xs font-medium ${
-                      workload > 80 ? 'text-destructive' : workload > 60 ? 'text-warning' : 'text-success'
-                    }`}
-                  >
+                  <span className={`text-xs font-medium ${
+                    workload > 80 ? 'text-destructive' : workload > 60 ? 'text-warning' : 'text-success'
+                  }`}>
                     {workload}%
                   </span>
                 </div>
