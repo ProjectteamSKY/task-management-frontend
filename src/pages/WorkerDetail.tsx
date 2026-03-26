@@ -1,22 +1,75 @@
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { workers, workerPerformance, taskAssignments, tasks, scheduleSlots, getWorkerWorkload, getOverallWorkload } from '@/data/mockData';
-import { ChevronRightIcon, ClockIcon, CheckIcon, StarIcon, AlertIcon } from '@/components/icons/Icons';
+import { workers, workerPerformance, tasks, getOverallWorkload, workerNotes } from '@/data/mockData';
+import { ChevronRightIcon, StarIcon, PencilIcon, PlusIcon } from '@/components/icons/Icons';
+import AddWorkerModal,      { WorkerFormData }  from '@/modal/AddWorkerModal';
+import WorkerOverview                           from '@/components/workers/WorkerOverview';
+import TaskHistory                              from '@/components/workers/TaskHistory';
+import SkillsAndCerts                           from '@/components/workers/SkillsAndCerts';
+import AvailabilityAndLeave                     from '@/components/workers/AvailabilityAndLeave';
+import PerformanceDetail                        from '@/components/workers/PerformanceDetail';
+import AssignTasksPanel                         from '@/components/workers/AssignTasksPanel';
+import DailyView                                from '@/components/workers/DailyView';
+import WorkerNotes                              from '@/components/workers/Workernotes';
 
-const TIME_SLOTS = ['09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00'];
-const DATES = ['2026-03-10','2026-03-11','2026-03-12','2026-03-13','2026-03-14'];
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Tab = 'overview' | 'history' | 'skills' | 'availability' | 'performance' | 'daily' | 'notes';
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'overview',     label: 'Overview'             },
+  { key: 'history',      label: 'Task History'         },
+  { key: 'skills',       label: 'Skills & Certs'       },
+  { key: 'availability', label: 'Availability & Leave' },
+  { key: 'performance',  label: 'Performance'          },
+  { key: 'daily',        label: 'Daily View'           },
+  { key: 'notes',        label: 'Notes'                },
+];
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function WorkerDetail() {
   const { id } = useParams<{ id: string }>();
-  const worker = workers.find(w => w.id === id);
+  const worker  = workers.find(w => w.id === id);
+
+  const [activeTab,    setActiveTab]    = useState<Tab>('overview');
+  const [isEditOpen,   setIsEditOpen]   = useState(false);
+  const [isAssignOpen, setIsAssignOpen] = useState(false);
+
   if (!worker) return <div className="text-foreground">Worker not found</div>;
 
-  const perf = workerPerformance.find(p => p.workerId === worker.id);
-  const assignments = taskAssignments.filter(a => a.workerId === worker.id);
+  const perf        = workerPerformance.find(p => p.workerId === worker.id);
   const workerTasks = tasks.filter(t => t.assignedWorkers.includes(worker.id));
-  const workload = getOverallWorkload(worker.id);
+  const workload    = getOverallWorkload(worker.id);
+
+  // Notes for this worker
+  const initialNotes = workerNotes.filter(n => n.workerId === worker.id)
+    .map(({ workerId: _wid, ...rest }) => rest); // strip workerId before passing in
+
+  const workerToFormData = (): WorkerFormData => ({
+    name:         worker.name,
+    role:         worker.role,
+    department:   worker.department,
+    email:        worker.email,
+    status:       worker.status as WorkerFormData['status'],
+    dailyCap:     String(worker.dailyCapacityHours),
+    capabilities: worker.capabilities.map(c => ({ name: c.name, proficiency: c.proficiency })),
+  });
+
+  const initialSkills = worker.capabilities.map((c, i) => ({
+    id:          String(i),
+    name:        c.name,
+    category:    'Technical',
+    proficiency: c.proficiency,
+  }));
+
+  function handleAssign(taskId: string, assigned: boolean) {
+    console.log(`Task ${taskId} ${assigned ? 'assigned to' : 'unassigned from'} ${worker.name}`);
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
+
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Link to="/workers" className="hover:text-foreground transition-colors">Workers</Link>
@@ -24,21 +77,25 @@ export default function WorkerDetail() {
         <span className="text-foreground">{worker.name}</span>
       </div>
 
-      {/* Profile header */}
+      {/* ── Profile header ── */}
       <div className="glass rounded-xl p-6 flex items-start gap-6">
         <div className="w-16 h-16 rounded-xl gradient-primary flex items-center justify-center text-xl font-bold text-primary-foreground shrink-0">
           {worker.avatar}
         </div>
+
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-bold text-foreground">{worker.name}</h1>
             <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
               worker.status === 'active' ? 'bg-success/15 text-success' : 'bg-warning/15 text-warning'
-            }`}>{worker.status}</span>
+            }`}>
+              {worker.status}
+            </span>
           </div>
-          <p className="text-sm text-muted-foreground mt-0.5">{worker.role} · {worker.department} · {worker.email}</p>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {worker.role} · {worker.department} · {worker.email}
+          </p>
 
-          {/* Capabilities */}
           <div className="flex flex-wrap gap-2 mt-3">
             {worker.capabilities.map(c => (
               <div key={c.name} className="flex items-center gap-1.5 text-xs bg-secondary rounded-md px-2.5 py-1.5">
@@ -59,124 +116,146 @@ export default function WorkerDetail() {
           </div>
         </div>
 
-        {/* Stats */}
-        <div className="flex gap-4 shrink-0">
-          <div className="text-center">
-            <p className="text-2xl font-bold text-foreground">{worker.dailyCapacityHours}h</p>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Daily Cap</p>
+        {/* Stats + action buttons */}
+        <div className="flex flex-col items-end gap-3 shrink-0">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsAssignOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg gradient-primary text-primary-foreground hover:opacity-90 transition-opacity font-medium"
+            >
+              <PlusIcon size={13} />
+              Assign Tasks
+            </button>
+            <button
+              onClick={() => setIsEditOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/70 hover:text-foreground transition-colors"
+            >
+              <PencilIcon size={13} />
+              Edit
+            </button>
           </div>
-          <div className="text-center">
-            <p className={`text-2xl font-bold ${workload > 80 ? 'text-destructive' : workload > 60 ? 'text-warning' : 'text-success'}`}>{workload}%</p>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Workload</p>
-          </div>
-          {perf && (
+
+          <div className="flex gap-4">
             <div className="text-center">
-              <p className="text-2xl font-bold text-foreground flex items-center gap-1"><StarIcon size={16} className="text-warning" />{perf.qualityScore}</p>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Quality</p>
+              <p className="text-2xl font-bold text-foreground">{worker.dailyCapacityHours}h</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Daily Cap</p>
             </div>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Performance */}
-        {perf && (
-          <div className="glass rounded-xl p-5">
-            <h3 className="text-sm font-semibold text-foreground mb-4">Performance</h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-secondary/50 rounded-lg p-3">
-                <p className="text-xs text-muted-foreground">Tasks Completed</p>
-                <p className="text-lg font-bold text-foreground">{perf.tasksCompleted}</p>
-              </div>
-              <div className="bg-secondary/50 rounded-lg p-3">
-                <p className="text-xs text-muted-foreground">Avg Completion</p>
-                <p className="text-lg font-bold text-foreground">{perf.avgCompletionTime}h</p>
-              </div>
-              <div className="bg-secondary/50 rounded-lg p-3">
-                <p className="text-xs text-muted-foreground">On-Time Rate</p>
-                <p className="text-lg font-bold text-success">{Math.round(perf.onTimeRate * 100)}%</p>
-              </div>
-              <div className="bg-secondary/50 rounded-lg p-3">
-                <p className="text-xs text-muted-foreground">Quality Score</p>
-                <p className="text-lg font-bold text-foreground">{perf.qualityScore}/5</p>
-              </div>
+            <div className="text-center">
+              <p className={`text-2xl font-bold ${
+                workload > 80 ? 'text-destructive' : workload > 60 ? 'text-warning' : 'text-success'
+              }`}>{workload}%</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Workload</p>
             </div>
-          </div>
-        )}
-
-        {/* Assigned tasks */}
-        <div className="glass rounded-xl p-5">
-          <h3 className="text-sm font-semibold text-foreground mb-4">Assigned Tasks ({workerTasks.length})</h3>
-          <div className="space-y-2 max-h-[250px] overflow-y-auto scrollbar-thin">
-            {workerTasks.map(t => (
-              <div key={t.id} className="flex items-center gap-3 bg-secondary/50 rounded-lg p-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-foreground truncate">{t.title}</p>
-                  <p className="text-xs text-muted-foreground">{t.estimatedHours}h · {t.priority}</p>
-                </div>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full ${
-                  t.status === 'done' ? 'bg-success/15 text-success' :
-                  t.status === 'in_progress' ? 'bg-warning/15 text-warning' :
-                  'bg-primary/15 text-primary'
-                }`}>{t.status.replace('_', ' ')}</span>
+            {perf && (
+              <div className="text-center">
+                <p className="text-2xl font-bold text-foreground flex items-center gap-1">
+                  <StarIcon size={16} className="text-warning" />
+                  {perf.qualityScore}
+                </p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Quality</p>
               </div>
-            ))}
+            )}
           </div>
         </div>
       </div>
 
-      {/* Schedule grid */}
-      <div className="glass rounded-xl p-5">
-        <h3 className="text-sm font-semibold text-foreground mb-4">Weekly Schedule</h3>
-        <div className="overflow-x-auto scrollbar-thin">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="text-[10px] uppercase tracking-wider text-muted-foreground p-2 text-left">Date</th>
-                {TIME_SLOTS.map(s => (
-                  <th key={s} className="text-[10px] text-muted-foreground p-2 text-center font-normal">{s}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {DATES.map(date => {
-                const daySlots = scheduleSlots.filter(s => s.workerId === worker.id && s.date === date);
-                return (
-                  <tr key={date}>
-                    <td className="text-xs text-foreground p-2 font-medium whitespace-nowrap">{date.slice(5)}</td>
-                    {TIME_SLOTS.map((time, i) => {
-                      const slot = daySlots.find(s => s.startTime === time);
-                      const status = slot?.status || 'available';
-                      const task = slot?.taskId ? tasks.find(t => t.id === slot.taskId) : null;
-                      return (
-                        <td key={time} className="p-1">
-                          <div
-                            className={`h-8 rounded-md flex items-center justify-center text-[9px] font-medium cursor-default transition-colors ${
-                              status === 'allocated' ? 'slot-allocated' :
-                              status === 'leave' ? 'slot-leave' :
-                              status === 'blocked' ? 'slot-blocked' :
-                              'slot-available'
-                            }`}
-                            title={task ? task.title : status}
-                          >
-                            {status === 'allocated' ? '█' : status === 'leave' ? 'L' : '░'}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div className="flex gap-4 mt-3 text-[10px] text-muted-foreground">
-          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded slot-allocated" /> Allocated</span>
-          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded slot-available" /> Available</span>
-          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded slot-leave" /> Leave</span>
-          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded slot-blocked" /> Blocked</span>
-        </div>
+      {/* ── Tabs ── */}
+      <div className="flex items-center gap-1 border-b border-border/50 overflow-x-auto scrollbar-none">
+        {TABS.map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
+              activeTab === tab.key
+                ? 'text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab.label}
+
+            {/* Task count badge on Task History tab */}
+            {tab.key === 'history' && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                activeTab === 'history'
+                  ? 'bg-primary/15 text-primary'
+                  : 'bg-secondary text-muted-foreground'
+              }`}>
+                {workerTasks.length}
+              </span>
+            )}
+
+            {/* Notes count badge on Notes tab */}
+            {tab.key === 'notes' && initialNotes.length > 0 && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                activeTab === 'notes'
+                  ? 'bg-primary/15 text-primary'
+                  : 'bg-secondary text-muted-foreground'
+              }`}>
+                {initialNotes.length}
+              </span>
+            )}
+
+            {activeTab === tab.key && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
+            )}
+          </button>
+        ))}
       </div>
+
+      {/* ── Tab content ── */}
+      {activeTab === 'overview' && (
+        <WorkerOverview worker={worker} perf={perf} workerTasks={workerTasks} workload={workload} />
+      )}
+      {activeTab === 'history' && (
+        <TaskHistory workerId={worker.id} />
+      )}
+      {activeTab === 'skills' && (
+        <SkillsAndCerts
+          initialSkills={initialSkills}
+          initialCerts={[]}
+          onSkillsChange={updated => console.log('Skills updated:', updated)}
+          onCertsChange={updated  => console.log('Certs updated:',  updated)}
+        />
+      )}
+      {activeTab === 'availability' && (
+        <AvailabilityAndLeave onChange={data => console.log('Availability updated:', data)} />
+      )}
+      {activeTab === 'performance' && perf && (
+        <PerformanceDetail perf={perf} />
+      )}
+      {activeTab === 'performance' && !perf && (
+        <div className="glass rounded-xl p-12 flex flex-col items-center justify-center text-center">
+          <p className="text-sm text-muted-foreground">No performance data available for this worker.</p>
+        </div>
+      )}
+      {activeTab === 'daily' && (
+        <DailyView workerId={worker.id} />
+      )}
+
+      {/* Notes tab */}
+      {activeTab === 'notes' && (
+        <WorkerNotes
+          workerId={worker.id}
+          initialNotes={initialNotes}
+          onChange={updated => console.log('Notes updated:', updated)}
+        />
+      )}
+
+      {/* ── Edit Modal ── */}
+      <AddWorkerModal
+        open={isEditOpen}
+        onClose={() => setIsEditOpen(false)}
+        onSubmit={data => console.log('Updated worker payload:', data)}
+        initialData={workerToFormData()}
+      />
+
+      {/* ── Assign Tasks Panel ── */}
+      <AssignTasksPanel
+        open={isAssignOpen}
+        worker={{ id: worker.id, name: worker.name, dailyCapacityHours: worker.dailyCapacityHours }}
+        onClose={() => setIsAssignOpen(false)}
+        onAssign={handleAssign}
+      />
     </div>
   );
 }
