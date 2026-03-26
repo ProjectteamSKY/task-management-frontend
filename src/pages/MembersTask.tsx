@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { workers, tasks, taskAssignments } from '@/data/mockData';
-import { ClockIcon, AlertIcon, CheckIcon } from '@/components/icons/Icons';
+import { ClockIcon, AlertIcon, CheckIcon, ChevronDownIcon } from '@/components/icons/Icons';
+import AssignTasksPanel from '@/components/workers/AssignTasksPanel';
 
 const priorityStyles: Record<string, string> = {
   critical: 'bg-destructive/15 text-destructive border border-destructive/20',
@@ -17,91 +18,198 @@ const statusStyles: Record<string, string> = {
   done: 'bg-success/15 text-success',
 };
 
-const approvalStyles: Record<string, string> = {
-  approved: 'bg-success/15 text-success border border-success/20',
-  pending: 'bg-warning/15 text-warning border border-warning/20',
-  rejected: 'bg-destructive/15 text-destructive border border-destructive/20',
-};
+type Filter = 'all' | 'active' | 'atrisk';
+
+interface Assignment {
+  taskId: string;
+  workerId: string;
+}
 
 export default function MemberTasks() {
-  const [selectedWorkerId, setSelectedWorkerId] = useState(workers[0]?.id ?? '');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [focusedWorker, setFocusedWorker] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(
+    Object.fromEntries(workers.map(w => [w.id, true]))
+  );
+  const [localAssignments, setLocalAssignments] = useState<Assignment[]>(
+    taskAssignments.map(a => ({ taskId: a.taskId, workerId: a.workerId }))
+  );
+  const [localTasks, setLocalTasks] = useState(() => tasks.map(t => ({ ...t })));
+  const [reassigning, setReassigning] = useState<{
+    taskId: string;
+    fromWorkerId: string;
+    picked: string | null;
+  } | null>(null);
+  const [assigningTo, setAssigningTo] = useState<string | null>(null);
 
-  const selectedWorker = workers.find(w => w.id === selectedWorkerId);
+  // ── AssignTasksPanel state ────────────────────────────────────────
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelWorkerId, setPanelWorkerId] = useState<string | null>(null);
 
-  // Get all task assignments for selected worker
-  const workerAssignments = taskAssignments.filter(a => a.workerId === selectedWorkerId);
-  const assignedTaskIds = workerAssignments.map(a => a.taskId);
-  const workerTasks = tasks.filter(t => assignedTaskIds.includes(t.id));
+  const panelWorker = workers.find(w => w.id === panelWorkerId);
 
-  // Stats
-  const totalHours = workerTasks.reduce((s, t) => s + t.estimatedHours, 0);
-  const pendingApprovals = workerAssignments.filter(a => a.approvalStatus === 'pending').length;
-  const atRiskTasks = workerTasks.filter(t => {
-    const due = new Date(t.dueDate);
-    const start = new Date(t.startDate);
-    const days = Math.max(1, Math.ceil((due.getTime() - start.getTime()) / 86400000));
-    const capacity = (selectedWorker?.dailyCapacityHours ?? 8) * days;
-    return t.estimatedHours > capacity * 0.8;
-  });
+  function openPanel(workerId: string) {
+    setPanelWorkerId(workerId);
+    setPanelOpen(true);
+  }
 
-  const getDeadlineRisk = (task: typeof tasks[0]) => {
+  function handlePanelAssign(taskId: string, assigned: boolean) {
+    if (!panelWorkerId) return;
+    setLocalAssignments(prev => {
+      const without = prev.filter(
+        a => !(a.taskId === taskId && a.workerId === panelWorkerId)
+      );
+      return assigned ? [...without, { taskId, workerId: panelWorkerId }] : without;
+    });
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────
+  const getWorkerTasks = (wid: string) =>
+    localAssignments
+      .filter(a => a.workerId === wid)
+      .map(a => localTasks.find(t => t.id === a.taskId))
+      .filter(Boolean) as typeof tasks;
+
+  const unassignedTasks = localTasks.filter(
+    t => !localAssignments.some(a => a.taskId === t.id)
+  );
+
+  const getWorkloadPct = (wid: string) => {
+    const wt = getWorkerTasks(wid);
+    const total = wt.reduce((s, t) => s + t.estimatedHours, 0);
+    const cap = (workers.find(w => w.id === wid)?.dailyCapacityHours ?? 8) * 5;
+    return Math.min(100, Math.round((total / cap) * 100));
+  };
+
+  const wlBarColor = (pct: number) =>
+    pct >= 80 ? 'bg-destructive' : pct >= 60 ? 'bg-warning' : 'bg-success';
+
+  const getDeadlineRisk = (task: typeof tasks[0], wid: string) => {
     const due = new Date(task.dueDate);
     const start = new Date(task.startDate);
     const days = Math.max(1, Math.ceil((due.getTime() - start.getTime()) / 86400000));
-    const capacity = (selectedWorker?.dailyCapacityHours ?? 8) * days;
-    if (task.estimatedHours > capacity) return 'high';
-    if (task.estimatedHours > capacity * 0.8) return 'medium';
+    const cap = (workers.find(w => w.id === wid)?.dailyCapacityHours ?? 8) * days;
+    if (task.estimatedHours > cap) return 'high';
+    if (task.estimatedHours > cap * 0.8) return 'medium';
     return 'low';
   };
 
+  // ── Actions ──────────────────────────────────────────────────────
+  const handleChangeStatus = (taskId: string, status: string) =>
+    setLocalTasks(prev => prev.map(t => t.id === taskId ? { ...t, status } : t));
+
+  const handleRemove = (taskId: string, workerId: string) =>
+    setLocalAssignments(prev =>
+      prev.filter(a => !(a.taskId === taskId && a.workerId === workerId))
+    );
+
+  const handleConfirmReassign = () => {
+    if (!reassigning?.picked) return;
+    setLocalAssignments(prev =>
+      prev.map(a =>
+        a.taskId === reassigning.taskId && a.workerId === reassigning.fromWorkerId
+          ? { ...a, workerId: reassigning.picked! }
+          : a
+      )
+    );
+    setReassigning(null);
+  };
+
+  const handleAssignTask = (taskId: string, workerId: string) => {
+    setLocalAssignments(prev => [...prev, { taskId, workerId }]);
+    setAssigningTo(null);
+  };
+
+  // ── Filtered workers ─────────────────────────────────────────────
+  let visibleWorkers = workers;
+  if (focusedWorker) {
+    visibleWorkers = workers.filter(w => w.id === focusedWorker);
+  } else if (filter === 'active') {
+    visibleWorkers = workers.filter(w => w.status === 'active');
+  } else if (filter === 'atrisk') {
+    visibleWorkers = workers.filter(w =>
+      getWorkerTasks(w.id).some(t => getDeadlineRisk(t, w.id) === 'high')
+    );
+  }
+
   return (
-    <div className="flex h-[calc(100vh-64px)] gap-0 animate-fade-in overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-64px)] overflow-hidden animate-fade-in">
 
-      {/* LEFT PANEL — worker list */}
-      <div className="w-64 shrink-0 border-r border-border flex flex-col">
-        <div className="p-4 border-b border-border">
-          <h2 className="text-sm font-semibold text-foreground">Team Members</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">{workers.length} workers</p>
+      {/* ── Top bar ── */}
+      <div className="px-6 py-4 border-b border-border flex items-center justify-between shrink-0">
+        <h1 className="text-base font-semibold text-foreground">Member Tasks</h1>
+
+        <div className="flex items-center gap-3">
+          {/* Filter pills */}
+          <div className="flex items-center gap-1.5">
+            {(['all', 'active', 'atrisk'] as Filter[]).map(f => (
+              <button
+                key={f}
+                onClick={() => { setFilter(f); setFocusedWorker(null); }}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors font-medium
+                  ${filter === f && !focusedWorker
+                    ? 'border-border bg-secondary text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+              >
+                {f === 'all' ? 'All workers' : f === 'active' ? 'Active' : 'At risk'}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="overflow-y-auto flex-1 scrollbar-thin py-2">
-          {workers.map(worker => {
-            const wAssignments = taskAssignments.filter(a => a.workerId === worker.id);
-            const wTasks = tasks.filter(t => wAssignments.map(a => a.taskId).includes(t.id));
-            const pending = wAssignments.filter(a => a.approvalStatus === 'pending').length;
-            const isSelected = selectedWorkerId === worker.id;
+      </div>
 
+      {/* ── Worker avatar strip ── */}
+      <div className="px-6 py-3 border-b border-border shrink-0">
+        <div className="flex items-center justify-evenly w-full">
+
+          {/* "All" chip */}
+          <button
+            onClick={() => setFocusedWorker(null)}
+            className={`flex flex-col items-center gap-1 px-1.5 py-1.5 rounded-xl border transition-colors flex-1
+              ${!focusedWorker
+                ? 'border-primary/40 bg-primary/10'
+                : 'border-transparent hover:bg-secondary/60'}`}
+          >
+            <div className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-[10px] font-semibold text-muted-foreground">
+              All
+            </div>
+            <span className="text-[9px] font-medium text-foreground">All</span>
+            <span className="text-[9px] text-muted-foreground">{workers.length}</span>
+          </button>
+
+          {/* Worker chips */}
+          {workers.map(w => {
+            const wt = getWorkerTasks(w.id);
+            const pct = getWorkloadPct(w.id);
+            const isFocused = focusedWorker === w.id;
             return (
               <button
-                key={worker.id}
-                onClick={() => setSelectedWorkerId(worker.id)}
-                className={`w-full text-left px-4 py-3 transition-colors flex items-center gap-3 group
-                  ${isSelected
-                    ? 'bg-primary/10 border-r-2 border-primary'
-                    : 'hover:bg-secondary/50 border-r-2 border-transparent'
-                  }`}
+                key={w.id}
+                onClick={() => setFocusedWorker(isFocused ? null : w.id)}
+                className={`flex flex-col items-center gap-1 px-1.5 py-1.5 rounded-xl border transition-colors flex-1
+                  ${isFocused
+                    ? 'border-primary/40 bg-primary/10'
+                    : 'border-transparent hover:bg-secondary/60'}`}
               >
-                {/* Avatar */}
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0
-                  ${isSelected ? 'bg-primary/20 text-primary' : 'bg-secondary text-secondary-foreground'}`}>
-                  {worker.avatar}
-                </div>
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-sm font-medium text-foreground truncate">{worker.name}</p>
-                    {pending > 0 && (
-                      <span className="text-[10px] bg-warning/20 text-warning px-1.5 py-0.5 rounded-full font-medium">
-                        {pending}
-                      </span>
-                    )}
+                <div className="relative">
+                  <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-semibold text-primary">
+                    {w.avatar}
                   </div>
-                  <p className="text-xs text-muted-foreground truncate">{worker.role}</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                    {wTasks.length} tasks
-                    <span className={`ml-1.5 ${worker.status === 'active' ? 'text-success' : 'text-warning'}`}>
-                      · {worker.status}
-                    </span>
-                  </p>
+                  <span className={`absolute bottom-0 right-0 w-2 h-2 rounded-full border-2 border-background
+                    ${w.status === 'active' ? 'bg-success' : 'bg-warning'}`}
+                  />
+                </div>
+                <span className="text-[9px] font-medium text-foreground truncate max-w-full">
+                  {w.name.split(' ')[0]}
+                </span>
+                <div className="flex items-center gap-1 w-full px-1">
+                  <div className="flex-1 h-1 rounded-full bg-border overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${wlBarColor(pct)}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <span className="text-[9px] text-muted-foreground">{wt.length}</span>
                 </div>
               </button>
             );
@@ -109,188 +217,303 @@ export default function MemberTasks() {
         </div>
       </div>
 
-      {/* RIGHT PANEL — tasks for selected worker */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* ── Worker rows (scrollable) ── */}
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3">
+        {visibleWorkers.map(w => {
+          const wt = getWorkerTasks(w.id);
+          const atRisk = wt.filter(t => getDeadlineRisk(t, w.id) === 'high').length;
+          const totalHrs = wt.reduce((s, t) => s + t.estimatedHours, 0);
+          const pct = getWorkloadPct(w.id);
+          const isExpanded = expanded[w.id] ?? true;
+          const isAssigning = assigningTo === w.id;
+          const otherWorkers = workers.filter(x => x.id !== w.id && x.status === 'active');
 
-        {/* Header */}
-        {selectedWorker && (
-          <div className="px-6 py-4 border-b border-border flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-sm font-bold text-primary">
-                {selectedWorker.avatar}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-lg font-bold text-foreground">{selectedWorker.name}</h1>
-                  <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium
-                    ${selectedWorker.status === 'active'
-                      ? 'bg-success/15 text-success'
-                      : 'bg-warning/15 text-warning'}`}>
-                    {selectedWorker.status}
-                  </span>
+          return (
+            <div key={w.id} className="rounded-xl border border-border overflow-hidden bg-secondary/5">
+
+              {/* ── Worker header ── */}
+              <div
+                className="flex items-center gap-3 px-5 py-3 cursor-pointer hover:bg-secondary/30 transition-colors border-b border-border bg-secondary/20"
+                onClick={() => setExpanded(prev => ({ ...prev, [w.id]: !isExpanded }))}
+              >
+                <div className="w-9 h-9 rounded-full bg-primary/15 flex items-center justify-center text-xs font-semibold text-primary shrink-0">
+                  {w.avatar}
                 </div>
-                <p className="text-sm text-muted-foreground">{selectedWorker.role} · {selectedWorker.department}</p>
-              </div>
-            </div>
 
-            {/* Stats row */}
-            <div className="flex items-center gap-6">
-              <div className="text-center">
-                <p className="text-xl font-bold text-foreground">{workerTasks.length}</p>
-                <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Tasks</p>
-              </div>
-              <div className="text-center">
-                <p className="text-xl font-bold text-foreground">{totalHours}h</p>
-                <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Total hrs</p>
-              </div>
-              <div className="text-center">
-                <p className={`text-xl font-bold ${pendingApprovals > 0 ? 'text-warning' : 'text-muted-foreground'}`}>
-                  {pendingApprovals}
-                </p>
-                <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Pending</p>
-              </div>
-              <div className="text-center">
-                <p className={`text-xl font-bold ${atRiskTasks.length > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                  {atRiskTasks.length}
-                </p>
-                <p className="text-[11px] text-muted-foreground uppercase tracking-wide">At Risk</p>
-              </div>
-              <div className="text-center">
-                <p className="text-xl font-bold text-foreground">{selectedWorker.dailyCapacityHours}h</p>
-                <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Daily Cap</p>
-              </div>
-            </div>
-          </div>
-        )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-foreground">{w.name}</span>
+                    {w.status !== 'active' && (
+                      <span className="text-[10px] bg-warning/15 text-warning px-2 py-0.5 rounded-full font-medium">
+                        {w.status}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">{w.role} · {w.department}</p>
+                </div>
 
-        {/* Task list */}
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-6">
-          {workerTasks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center mb-3">
-                <CheckIcon size={20} className="text-muted-foreground" />
-              </div>
-              <p className="text-sm font-medium text-foreground">No tasks assigned</p>
-              <p className="text-xs text-muted-foreground mt-1">This worker has no tasks yet.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {/* Table header */}
-              <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr] gap-4 px-4 pb-1">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Task</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Status</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Priority</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Hours</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Risk</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Approval</p>
-              </div>
-
-              {workerTasks.map(task => {
-                const assignment = workerAssignments.find(a => a.taskId === task.id);
-                const risk = getDeadlineRisk(task);
-
-                return (
-                  <div key={task.id}
-                    className="glass rounded-xl p-4 grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr] gap-4 items-center hover:bg-secondary/20 transition-colors">
-
-                    {/* Task name */}
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{task.title}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-xs">{task.description}</p>
-                      <p className="text-[11px] text-muted-foreground mt-1">Due {task.dueDate}</p>
-                    </div>
-
-                    {/* Status */}
-                    <span className={`text-[11px] font-medium px-2.5 py-1 rounded-full w-fit ${statusStyles[task.status]}`}>
-                      {task.status.replace('_', ' ')}
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <span className="text-[11px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">
+                    {wt.length} tasks
+                  </span>
+                  <span className="text-[11px] text-muted-foreground px-2 py-1 rounded-full bg-secondary">
+                    <ClockIcon size={11} className="inline mr-0.5" />{totalHrs}h
+                  </span>
+                  {atRisk > 0 ? (
+                    <span className="text-[11px] bg-destructive/10 text-destructive px-2.5 py-1 rounded-full font-medium border border-destructive/20">
+                      <AlertIcon size={10} className="inline mr-0.5" />{atRisk} at risk
                     </span>
-
-                    {/* Priority */}
-                    <span className={`text-[11px] font-medium px-2.5 py-1 rounded-full w-fit ${priorityStyles[task.priority]}`}>
-                      {task.priority}
+                  ) : (
+                    <span className="text-[11px] bg-success/10 text-success px-2.5 py-1 rounded-full">
+                      <CheckIcon size={10} className="inline mr-0.5" />on track
                     </span>
-
-                    {/* Hours */}
-                    <div className="flex items-center gap-1 text-sm text-foreground">
-                      <ClockIcon size={13} className="text-muted-foreground" />
-                      <span>{task.estimatedHours}h</span>
-                      {assignment?.assignedHours && assignment.assignedHours !== task.estimatedHours && (
-                        <span className="text-[11px] text-muted-foreground">/ {assignment.assignedHours}h alloc</span>
-                      )}
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-16 h-1.5 rounded-full bg-border overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${wlBarColor(pct)}`}
+                        style={{ width: `${pct}%` }}
+                      />
                     </div>
+                    <span className="text-[11px] text-muted-foreground w-7">{pct}%</span>
+                  </div>
+                  {/* Per-row quick assign — opens panel directly for this worker */}
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      openPanel(w.id);
+                    }}
+                    className={`text-[11px] font-medium px-3 py-1.5 rounded-lg border transition-colors
+                      ${panelWorkerId === w.id && panelOpen
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border bg-secondary text-muted-foreground hover:text-foreground'}`}
+                  >
+                    + Assign
+                  </button>
+                  <ChevronDownIcon
+                    size={14}
+                    className={`text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+                  />
+                </div>
+              </div>
 
-                    {/* Deadline Risk */}
-                    <div className="flex items-center gap-1">
-                      {risk === 'high' && (
-                        <span className="flex items-center gap-1 text-[11px] font-medium text-destructive bg-destructive/10 px-2 py-1 rounded-full border border-destructive/20">
-                          <AlertIcon size={11} /> high
-                        </span>
-                      )}
-                      {risk === 'medium' && (
-                        <span className="flex items-center gap-1 text-[11px] font-medium text-warning bg-warning/10 px-2 py-1 rounded-full border border-warning/20">
-                          <AlertIcon size={11} /> med
-                        </span>
-                      )}
-                      {risk === 'low' && (
-                        <span className="flex items-center gap-1 text-[11px] font-medium text-success bg-success/10 px-2 py-1 rounded-full border border-success/20">
-                          <CheckIcon size={11} /> ok
-                        </span>
-                      )}
+              {/* ── Expanded body ── */}
+              {isExpanded && (
+                <>
+                  {wt.length === 0 ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="text-center">
+                        <CheckIcon size={20} className="text-muted-foreground mx-auto mb-2" />
+                        <p className="text-sm text-muted-foreground">No tasks assigned</p>
+                        <p className="text-xs text-muted-foreground/60 mt-1">Click "+ Assign" to add work</p>
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      {/* Column headers */}
+                      <div className="grid grid-cols-[2fr_110px_100px_70px_90px_200px] gap-2 px-5 py-2 border-b border-border">
+                        {['Task', 'Status', 'Priority', 'Hours', 'Risk', 'Actions'].map(h => (
+                          <p key={h} className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{h}</p>
+                        ))}
+                      </div>
 
-                    {/* Approval + AI confidence */}
-                    <div className="flex flex-col gap-1">
-                      {assignment?.approvalStatus && (
-                        <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full w-fit ${approvalStyles[assignment.approvalStatus]}`}>
-                          {assignment.approvalStatus}
-                        </span>
-                      )}
-                      {assignment?.confidence && (
-                        <span className="text-[10px] text-muted-foreground">
-                          AI {assignment.confidence}% match
-                        </span>
-                      )}
-                      {assignment?.approvalStatus === 'pending' && (
-                        <div className="flex gap-1 mt-1">
-                          <button className="text-[10px] font-medium bg-success/15 text-success px-2 py-1 rounded hover:bg-success/25 transition-colors">
-                            ✓ Approve
-                          </button>
-                          <button className="text-[10px] font-medium bg-primary/15 text-primary px-2 py-1 rounded hover:bg-primary/25 transition-colors">
-                            Reassign
-                          </button>
+                      {/* Task rows */}
+                      {wt.map(task => {
+                        const risk = getDeadlineRisk(task, w.id);
+                        const isThisReassign =
+                          reassigning?.taskId === task.id && reassigning.fromWorkerId === w.id;
+
+                        return (
+                          <div key={task.id}>
+                            <div className="grid grid-cols-[2fr_110px_100px_70px_90px_200px] gap-2 px-5 py-3 border-b border-border items-center hover:bg-secondary/20 transition-colors">
+                              <div>
+                                <p className="text-sm font-medium text-foreground">{task.title}</p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">Due {task.dueDate}</p>
+                              </div>
+
+                              <select
+                                value={task.status}
+                                onChange={e => handleChangeStatus(task.id, e.target.value)}
+                                onClick={e => e.stopPropagation()}
+                                className={`text-[11px] font-medium px-2 py-1 rounded-full border-0 cursor-pointer outline-none w-fit ${statusStyles[task.status]}`}
+                              >
+                                {['todo', 'in_progress', 'review', 'done', 'backlog'].map(s => (
+                                  <option key={s} value={s}>{s.replace('_', ' ')}</option>
+                                ))}
+                              </select>
+
+                              <span className={`text-[11px] font-medium px-2 py-1 rounded-full w-fit ${priorityStyles[task.priority]}`}>
+                                {task.priority}
+                              </span>
+
+                              <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                                <ClockIcon size={12} />
+                                <span>{task.estimatedHours}h</span>
+                              </div>
+
+                              {risk === 'high' ? (
+                                <span className="text-[11px] font-medium px-2 py-1 rounded-full w-fit bg-destructive/10 text-destructive border border-destructive/20 flex items-center gap-1">
+                                  <AlertIcon size={10} />high
+                                </span>
+                              ) : risk === 'medium' ? (
+                                <span className="text-[11px] font-medium px-2 py-1 rounded-full w-fit bg-warning/10 text-warning border border-warning/20">
+                                  watch
+                                </span>
+                              ) : (
+                                <span className="text-[11px] font-medium px-2 py-1 rounded-full w-fit bg-success/10 text-success border border-success/20 flex items-center gap-1">
+                                  <CheckIcon size={10} />ok
+                                </span>
+                              )}
+
+                              <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                                <button
+                                  onClick={() =>
+                                    setReassigning(isThisReassign
+                                      ? null
+                                      : { taskId: task.id, fromWorkerId: w.id, picked: null }
+                                    )
+                                  }
+                                  className={`text-[10px] font-medium px-2.5 py-1.5 rounded-lg transition-colors
+                                    ${isThisReassign
+                                      ? 'bg-primary/15 text-primary'
+                                      : 'bg-secondary text-muted-foreground hover:text-foreground'}`}
+                                >
+                                  Reassign
+                                </button>
+                                <button
+                                  onClick={() => handleRemove(task.id, w.id)}
+                                  className="text-[10px] font-medium px-2.5 py-1.5 rounded-lg bg-secondary text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+
+                            {isThisReassign && (
+                              <div className="px-5 py-4 border-b border-border bg-secondary/30">
+                                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3">
+                                  Reassign to
+                                </p>
+                                <div className="grid grid-cols-4 gap-2 mb-3">
+                                  {otherWorkers.map(ow => {
+                                    const op = getWorkloadPct(ow.id);
+                                    return (
+                                      <button
+                                        key={ow.id}
+                                        onClick={() =>
+                                          setReassigning(prev => prev ? { ...prev, picked: ow.id } : null)
+                                        }
+                                        className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border text-center transition-colors
+                                          ${reassigning?.picked === ow.id
+                                            ? 'border-primary bg-primary/10'
+                                            : 'border-border bg-secondary/30 hover:border-border/60'}`}
+                                      >
+                                        <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-xs font-semibold">
+                                          {ow.avatar}
+                                        </div>
+                                        <p className="text-[11px] font-medium text-foreground">{ow.name.split(' ')[0]}</p>
+                                        <p className="text-[10px] text-muted-foreground">{ow.role.split(' ')[0]}</p>
+                                        <div className="w-full h-1 rounded-full bg-border overflow-hidden">
+                                          <div
+                                            className={`h-full rounded-full ${wlBarColor(op)}`}
+                                            style={{ width: `${op}%` }}
+                                          />
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground">{op}% loaded</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={handleConfirmReassign}
+                                    disabled={!reassigning?.picked}
+                                    className="text-xs font-medium px-4 py-2 rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors"
+                                  >
+                                    Confirm reassignment
+                                  </button>
+                                  <button
+                                    onClick={() => setReassigning(null)}
+                                    className="text-xs font-medium px-4 py-2 rounded-lg bg-secondary text-muted-foreground hover:bg-secondary/80 transition-colors"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {isAssigning && (
+                    <div className="px-5 py-4 border-t border-border bg-secondary/20">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3">
+                        Assign task to {w.name}
+                      </p>
+                      {unassignedTasks.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No unassigned tasks available.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {unassignedTasks.map(task => (
+                            <div
+                              key={task.id}
+                              className="flex items-center gap-3 p-3 rounded-lg border border-border bg-secondary/30"
+                            >
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-foreground">{task.title}</p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                  {task.estimatedHours}h · due {task.dueDate}
+                                </p>
+                              </div>
+                              <span className={`text-[11px] font-medium px-2 py-1 rounded-full ${priorityStyles[task.priority]}`}>
+                                {task.priority}
+                              </span>
+                              <button
+                                onClick={() => handleAssignTask(task.id, w.id)}
+                                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/15 text-primary hover:bg-primary/25 transition-colors whitespace-nowrap"
+                              >
+                                Assign
+                              </button>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
-
-                  </div>
-                );
-              })}
+                  )}
+                </>
+              )}
             </div>
-          )}
-        </div>
-
-        {/* Footer summary bar */}
-        {workerTasks.length > 0 && selectedWorker && (
-          <div className="px-6 py-3 border-t border-border bg-secondary/20 shrink-0 flex items-center gap-6">
-            <p className="text-xs text-muted-foreground">
-              <span className="text-foreground font-medium">{workerTasks.length} tasks</span> · {totalHours}h total workload
-            </p>
-            {pendingApprovals > 0 && (
-              <p className="text-xs text-warning">
-                ⚠ {pendingApprovals} task{pendingApprovals > 1 ? 's' : ''} awaiting approval
-              </p>
-            )}
-            {atRiskTasks.length > 0 && (
-              <p className="text-xs text-destructive">
-                🔴 {atRiskTasks.length} task{atRiskTasks.length > 1 ? 's' : ''} at deadline risk
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground ml-auto">
-              Daily capacity: <span className="text-foreground font-medium">{selectedWorker.dailyCapacityHours}h/day</span>
-            </p>
-          </div>
-        )}
+          );
+        })}
       </div>
+
+      {/* Footer */}
+      <div className="px-6 py-3 border-t border-border bg-secondary/20 shrink-0 flex items-center gap-4 text-xs text-muted-foreground">
+        <span>
+          <span className="text-foreground font-medium">{workers.length} workers</span>
+          {' '}· {tasks.length} total tasks
+        </span>
+        {unassignedTasks.length > 0 && (
+          <span className="text-warning">⚠ {unassignedTasks.length} unassigned</span>
+        )}
+        <span className="ml-auto">
+          {visibleWorkers.filter(w =>
+            getWorkerTasks(w.id).some(t => getDeadlineRisk(t, w.id) === 'high')
+          ).length} workers with at-risk tasks
+        </span>
+      </div>
+
+      {/* ── AssignTasksPanel (slide-in) ── */}
+      {panelWorker && (
+        <AssignTasksPanel
+          open={panelOpen}
+          worker={panelWorker}
+          onClose={() => { setPanelOpen(false); setPanelWorkerId(null); }}
+          onAssign={handlePanelAssign}
+        />
+      )}
     </div>
   );
 }
