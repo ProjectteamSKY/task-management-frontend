@@ -5,10 +5,7 @@ const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const HOUR_SLOTS = [9, 10, 11, 12, 13, 14, 15, 16]; // 8 hours: 09:00–17:00
 const TOTAL_HOURS = HOUR_SLOTS.length;
 
-/**
- * For a given worker + date, returns an array of 8 values (one per hour slot).
- * Each value: 0 = free, 1 = half filled (30 min), 2 = fully filled (1 hr)
- */
+
 function getHourUnits(slots: ScheduleSlot[], workerId: number, date: string): number[] {
   // Build sub-slot map: "HH:MM" -> true if allocated/blocked
   const subSlotMap = new Set<string>();
@@ -40,13 +37,10 @@ function getHourUnits(slots: ScheduleSlot[], workerId: number, date: string): nu
 function getWorkedHours(slots: ScheduleSlot[], workerId: number, date: string): number {
   const units = getHourUnits(slots, workerId, date);
   const totalUnits = units.reduce((a, b) => a + b, 0);
-  return totalUnits / 2; // convert 30-min units to hours
+  return totalUnits / 2; 
 }
 
-/**
- * Renders 8 small square blocks for a day.
- * Each block: 0 units = full green, 1 unit = half blue/half green, 2 units = full blue
- */
+
 function HourBlocks({ hourUnits, leave }: { hourUnits: number[]; leave: boolean }) {
   if (leave) {
     return (

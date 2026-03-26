@@ -5,34 +5,15 @@ const DATES = ['2026-03-10', '2026-03-11', '2026-03-12', '2026-03-13', '2026-03-
 const DAY_LABELS = ['Mon 10', 'Tue 11', 'Wed 12', 'Thu 13', 'Fri 14'];
 const TOTAL_HOURS = 8;
 
-/**
- * Each TIME_SLOT represents a 1-hour capsule.
- * Within that hour there are 2 possible 30-min units:
- *   unit 0 → HH:00
- *   unit 1 → HH:30
- *
- * durationUnits in DB: 1 unit = 30 min, 2 units = 1 hr, etc.
- *
- * Spanning logic:
- *   - Consecutive filled capsules (same taskId & status) are ALL merged via colSpan
- *   - Including the partial last cell (e.g. half-filled hour)
- *   - fillPercent = totalFilledUnits / (span × 2) × 100
- *   - Rendered as a single CSS linear-gradient capsule
- *
- * Examples:
- *   09:00–12:00 (6 units) → span=3, fillPercent=100%
- *   09:00–10:30 (3 units) → span=2, fillPercent=75%
- *   09:00–09:30 (1 unit)  → span=1, fillPercent=50%
- */
 
 interface HourCell {
-  hour: string;           // e.g. "09:00"
-  status: string;         // dominant status for this hour
+  hour: string;           
+  status: string;         
   taskId?: string;
-  filledUnits: number;    // 0, 1, or 2 within this single hour
-  totalFilledUnits: number; // sum across the whole span (set after merging)
-  span: number;           // colSpan
-  fillPercent: number;    // 0–100, computed after merging
+  filledUnits: number;   
+  totalFilledUnits: number; 
+  span: number;           
+  fillPercent: number;    
 }
 
 function toMinutes(time: string): number {
@@ -41,7 +22,7 @@ function toMinutes(time: string): number {
 }
 
 function buildHourCells(daySlots: ScheduleSlot[]): HourCell[] {
-  // Expand every DB slot into 30-min sub-slot keys
+ 
   const subSlotMap: Record<string, { status: string; taskId?: string }> = {};
 
   for (const slot of daySlots) {
@@ -55,7 +36,6 @@ function buildHourCells(daySlots: ScheduleSlot[]): HourCell[] {
     }
   }
 
-  // Build one raw HourCell per TIME_SLOT
   const rawCells = TIME_SLOTS.map(hour => {
     const [h] = hour.split(':').map(Number);
     const hh = String(h).padStart(2, '0');
@@ -102,7 +82,7 @@ function buildHourCells(daySlots: ScheduleSlot[]): HourCell[] {
         span++;
         totalFilledUnits += next.filledUnits;
         absorbed.add(j);
-        cells[j].span = 0; // mark absorbed
+        cells[j].span = 0; 
       } else {
         break;
       }
