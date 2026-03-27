@@ -411,3 +411,68 @@ export const workerNotes = [
     createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
   },
 ];
+
+// ─── Emergency Contacts ───────────────────────────────────────────────────────
+ 
+export const emergencyContacts = [
+  { workerId: 'w1', fullName: 'Sarah Hassan',   relationship: 'Spouse',  phone: '+1 555 101 2020', email: 'sarah.hassan@email.com',  address: '12 Elm Street, Dubai, UAE' },
+  { workerId: 'w2', fullName: 'Robert Carter',  relationship: 'Parent',  phone: '+1 555 202 3030', email: 'robert.carter@email.com',  address: '45 Oak Avenue, New York, USA' },
+  { workerId: 'w3', fullName: 'James Williams', relationship: 'Sibling', phone: '+1 555 303 4040', email: 'james.williams@email.com', address: '78 Pine Road, London, UK' },
+  { workerId: 'w4', fullName: 'Carlos Lopez',   relationship: 'Spouse',  phone: '+1 555 404 5050', email: 'carlos.lopez@email.com',   address: '22 Maple Drive, Madrid, Spain' },
+  { workerId: 'w5', fullName: 'Jenny Kim',      relationship: 'Spouse',  phone: '+1 555 505 6060', email: 'jenny.kim@email.com',      address: '9 Cherry Lane, Seoul, South Korea' },
+  { workerId: 'w6', fullName: 'Wei Chen',       relationship: 'Parent',  phone: '+1 555 606 7070', email: 'wei.chen@email.com',       address: '33 Lotus Blvd, Shanghai, China' },
+  { workerId: 'w8', fullName: 'Raj Patel',      relationship: 'Sibling', phone: '+1 555 808 9090', email: 'raj.patel@email.com',      address: '17 Banyan Street, Mumbai, India' },
+];
+ 
+// ─── Equipment & Tools ────────────────────────────────────────────────────────
+ 
+export const workerEquipment = [
+  { id: 'eq1', workerId: 'w1', name: 'Power Drill',        equipmentId: 'EQ-2024-001', category: 'Tool',        assignedDate: '2024-01-15', returnDate: '',           condition: 'Good' as const },
+  { id: 'eq2', workerId: 'w1', name: 'Safety Helmet',      equipmentId: 'EQ-2024-002', category: 'Safety Gear', assignedDate: '2024-01-15', returnDate: '',           condition: 'Good' as const },
+  { id: 'eq3', workerId: 'w1', name: 'Voltage Tester',     equipmentId: 'EQ-2024-003', category: 'Tool',        assignedDate: '2024-03-01', returnDate: '2026-04-30', condition: 'Fair' as const },
+  { id: 'eq4', workerId: 'w2', name: 'MacBook Pro 16"',    equipmentId: 'EQ-2024-010', category: 'Device',      assignedDate: '2023-06-01', returnDate: '',           condition: 'Good' as const },
+  { id: 'eq5', workerId: 'w2', name: 'External Monitor',   equipmentId: 'EQ-2024-011', category: 'Device',      assignedDate: '2023-06-01', returnDate: '',           condition: 'Good' as const },
+  { id: 'eq6', workerId: 'w3', name: 'Testing Laptop',     equipmentId: 'EQ-2024-020', category: 'Device',      assignedDate: '2023-09-01', returnDate: '',           condition: 'Fair' as const },
+  { id: 'eq7', workerId: 'w4', name: 'iMac 27"',           equipmentId: 'EQ-2024-030', category: 'Device',      assignedDate: '2023-04-15', returnDate: '',           condition: 'Good' as const },
+  { id: 'eq8', workerId: 'w5', name: 'Service Van',        equipmentId: 'EQ-2024-040', category: 'Vehicle',     assignedDate: '2024-02-01', returnDate: '2026-06-30', condition: 'Good' as const },
+  { id: 'eq9', workerId: 'w5', name: 'Calibration Kit',    equipmentId: 'EQ-2024-041', category: 'Tool',        assignedDate: '2024-02-01', returnDate: '',           condition: 'Poor' as const },
+  { id: 'eq10', workerId: 'w8', name: 'Server Access Card', equipmentId: 'EQ-2024-050', category: 'Device',     assignedDate: '2023-11-01', returnDate: '',           condition: 'Good' as const },
+];
+
+// ─── Training Sessions ────────────────────────────────────────────────────────
+ 
+export const workerTrainingSessions = [
+  { id: 'tr1', workerId: 'w1', title: 'Advanced Electrical Safety', provider: 'OSHA Training Institute', category: 'Safety', status: 'completed' as const, startDate: '2026-01-10', endDate: '2026-01-12', progress: 100, notes: 'Passed with distinction.' },
+  { id: 'tr2', workerId: 'w1', title: 'Circuit Design Masterclass',  provider: 'IET Online',              category: 'Technical', status: 'in_progress' as const, startDate: '2026-03-01', endDate: '2026-04-30', progress: 45, notes: '' },
+  { id: 'tr3', workerId: 'w1', title: 'High Voltage Systems',        provider: 'NFPA Academy',            category: 'Technical', status: 'upcoming' as const,    startDate: '2026-05-01', endDate: '2026-05-03', progress: 0,  notes: 'Scheduled pending approval.' },
+  { id: 'tr4', workerId: 'w2', title: 'Python Advanced Patterns',    provider: 'Pluralsight',             category: 'Technical', status: 'completed' as const,    startDate: '2025-11-01', endDate: '2025-11-30', progress: 100, notes: '' },
+  { id: 'tr5', workerId: 'w2', title: 'System Design Fundamentals',  provider: 'ByteByteGo',              category: 'Technical', status: 'in_progress' as const,  startDate: '2026-02-15', endDate: '2026-04-15', progress: 70, notes: '' },
+  { id: 'tr6', workerId: 'w3', title: 'Selenium WebDriver Pro',      provider: 'Test Automation Univ.',  category: 'Technical', status: 'completed' as const,    startDate: '2025-12-01', endDate: '2025-12-15', progress: 100, notes: 'Excellent scores in practicals.' },
+  { id: 'tr7', workerId: 'w3', title: 'Performance Testing with k6', provider: 'Grafana Labs',            category: 'Technical', status: 'upcoming' as const,     startDate: '2026-04-10', endDate: '2026-04-11', progress: 0,  notes: '' },
+  { id: 'tr8', workerId: 'w8', title: 'CKA — Certified Kubernetes',  provider: 'Linux Foundation',       category: 'Technical', status: 'in_progress' as const,  startDate: '2026-02-01', endDate: '2026-05-01', progress: 60, notes: 'Exam booked for May.' },
+];
+ 
+// ─── Skill Goals ──────────────────────────────────────────────────────────────
+ 
+export const workerSkillGoals = [
+  { id: 'sg1', workerId: 'w1', goal: 'Achieve proficiency level 5 in Circuit Design',      progress: 60,  dueDate: '2026-06-30' },
+  { id: 'sg2', workerId: 'w1', goal: 'Complete NFPA High Voltage certification',            progress: 0,   dueDate: '2026-07-31' },
+  { id: 'sg3', workerId: 'w2', goal: 'Master distributed systems design patterns',          progress: 70,  dueDate: '2026-05-01' },
+  { id: 'sg4', workerId: 'w2', goal: 'Contribute to 3 open-source Python projects',         progress: 100, dueDate: '2026-03-31' },
+  { id: 'sg5', workerId: 'w3', goal: 'Build a full test automation framework from scratch', progress: 40,  dueDate: '2026-06-01' },
+  { id: 'sg6', workerId: 'w8', goal: 'Pass CKA exam on first attempt',                     progress: 60,  dueDate: '2026-05-15' },
+  { id: 'sg7', workerId: 'w8', goal: 'Reduce deployment pipeline time by 30%',             progress: 80,  dueDate: '2026-04-30' },
+];
+ 
+// ─── Shift Schedules ──────────────────────────────────────────────────────────
+ 
+export const workerShiftSchedules = [
+  { workerId: 'w1', shiftType: 'Morning'  as const, workingDays: ['Mon','Tue','Wed','Thu','Fri'] as const, startTime: '07:00', endTime: '15:00', breakDuration: 30 },
+  { workerId: 'w2', shiftType: 'Morning'  as const, workingDays: ['Mon','Tue','Wed','Thu','Fri'] as const, startTime: '09:00', endTime: '17:00', breakDuration: 60 },
+  { workerId: 'w3', shiftType: 'Morning'  as const, workingDays: ['Mon','Tue','Wed','Thu','Fri'] as const, startTime: '09:00', endTime: '17:00', breakDuration: 30 },
+  { workerId: 'w4', shiftType: 'Morning'  as const, workingDays: ['Mon','Tue','Wed','Thu','Fri'] as const, startTime: '10:00', endTime: '18:00', breakDuration: 60 },
+  { workerId: 'w5', shiftType: 'Morning'  as const, workingDays: ['Mon','Tue','Wed','Thu','Fri','Sat'] as const, startTime: '08:00', endTime: '16:00', breakDuration: 30 },
+  { workerId: 'w6', shiftType: 'Morning'  as const, workingDays: ['Mon','Tue','Wed','Thu','Fri'] as const, startTime: '09:00', endTime: '17:00', breakDuration: 60 },
+  { workerId: 'w7', shiftType: 'Rotating' as const, workingDays: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] as const, startTime: '08:00', endTime: '20:00', breakDuration: 60 },
+  { workerId: 'w8', shiftType: 'Evening'  as const, workingDays: ['Mon','Tue','Wed','Thu','Fri'] as const, startTime: '12:00', endTime: '20:00', breakDuration: 30 },
+];

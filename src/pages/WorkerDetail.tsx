@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { workers, workerPerformance, tasks, getOverallWorkload, workerNotes } from '@/data/mockData';
+import { workers, workerPerformance, tasks, getOverallWorkload, workerNotes, emergencyContacts, workerEquipment, workerTrainingSessions, workerSkillGoals, workerShiftSchedules  } from '@/data/mockData';
 import { ChevronRightIcon, StarIcon, PencilIcon, PlusIcon } from '@/components/icons/Icons';
 import AddWorkerModal,      { WorkerFormData }  from '@/modal/AddWorkerModal';
 import WorkerOverview                           from '@/components/workers/WorkerOverview';
@@ -11,10 +11,14 @@ import PerformanceDetail                        from '@/components/workers/Perfo
 import AssignTasksPanel                         from '@/components/workers/AssignTasksPanel';
 import DailyView                                from '@/components/workers/DailyView';
 import WorkerNotes                              from '@/components/workers/Workernotes';
+import EmergencyContact from '@/components/workers/Emergencycontact';
+import EquipmentTools from '@/components/workers/Equipmenttools';
+import TrainingDevelopment from '@/components/workers/Trainingdevelopment';
+import ShiftSchedulePlanner from '@/components/workers/Shiftscheduleplanner';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'history' | 'skills' | 'availability' | 'performance' | 'daily' | 'notes';
+type Tab = 'overview' | 'history' | 'skills' | 'availability' | 'performance' | 'daily' | 'notes' | 'emergency' | 'equipment' | 'training' | 'shift';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview',     label: 'Overview'             },
@@ -24,6 +28,11 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'performance',  label: 'Performance'          },
   { key: 'daily',        label: 'Daily View'           },
   { key: 'notes',        label: 'Notes'                },
+  { key: 'emergency',    label: 'Emergency Contact'    }, 
+  { key: 'equipment',    label: 'Equipment & Tools'    }, 
+  { key: 'training',     label: 'Training & Dev'       },
+  { key: 'shift',        label: 'Shift Planner'        }, 
+
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -160,7 +169,8 @@ export default function WorkerDetail() {
       </div>
 
       {/* ── Tabs ── */}
-      <div className="flex items-center gap-1 border-b border-border/50 overflow-x-auto scrollbar-none">
+      {/* <div className="flex items-center gap-1 border-b border-border/50 overflow-x-auto scrollbar-none"> */}
+      <div className="flex items-center gap-1 border-b border-border/50 overflow-x-auto tab-scrollbar">
         {TABS.map(tab => (
           <button
             key={tab.key}
@@ -238,6 +248,39 @@ export default function WorkerDetail() {
           workerId={worker.id}
           initialNotes={initialNotes}
           onChange={updated => console.log('Notes updated:', updated)}
+        />
+      )}
+
+       {/* Emergency Contact tab */}
+      {activeTab === 'emergency' && (
+        <EmergencyContact
+          initialData={emergencyContacts.find(c => c.workerId === worker.id)}
+          onChange={data => console.log('Emergency contact updated:', data)}
+        />
+      )}
+ 
+      {/* Equipment & Tools tab */}
+      {activeTab === 'equipment' && (
+        <EquipmentTools
+          initialEquipment={workerEquipment.filter(e => e.workerId === worker.id)}
+          onChange={updated => console.log('Equipment updated:', updated)}
+        />
+      )}
+
+       {/* Training & Development tab */}
+      {activeTab === 'training' && (
+        <TrainingDevelopment
+          initialSessions={workerTrainingSessions.filter(t => t.workerId === worker.id)}
+          initialGoals={workerSkillGoals.filter(g => g.workerId === worker.id)}
+          onChange={(sessions, goals) => console.log('Training updated:', sessions, goals)}
+        />
+      )}
+ 
+      {/* Shift & Schedule Planner tab */}
+      {activeTab === 'shift' && (
+        <ShiftSchedulePlanner
+          initialSchedule={workerShiftSchedules.find(s => s.workerId === worker.id)}
+          onChange={schedule => console.log('Shift updated:', schedule)}
         />
       )}
 
