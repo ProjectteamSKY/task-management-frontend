@@ -1,19 +1,61 @@
+import { useState } from 'react';
+import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { getWorkerWorkload, type ScheduleSlot, type Worker, type Task } from '../services/scheduleService';
 
 const TIME_SLOTS = ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
-const DATES = ['2026-03-10', '2026-03-11', '2026-03-12', '2026-03-13', '2026-03-14'];
-const DAY_LABELS = ['Mon 10', 'Tue 11', 'Wed 12', 'Thu 13', 'Fri 14'];
+const DAY_SHORT  = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const TOTAL_HOURS = 8;
 
+// ── Week helpers ──────────────────────────────────────────────────────────────
+
+function getMondayOf(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function toISODate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function getWeekDates(monday: Date): string[] {
+  return Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return toISODate(d);
+  });
+}
+
+function formatWeekRange(dates: string[]): string {
+  const start = new Date(dates[0] + 'T00:00:00');
+  const end   = new Date(dates[4] + 'T00:00:00');
+  const startM = start.toLocaleString('default', { month: 'short' });
+  const endM   = end.toLocaleString('default', { month: 'short' });
+  const startD = start.getDate();
+  const endD   = end.getDate();
+  const year   = end.getFullYear();
+  if (startM === endM) return `${startM} ${startD} – ${endD}, ${year}`;
+  return `${startM} ${startD} – ${endM} ${endD}, ${year}`;
+}
+
+function formatDayLabel(date: string, di: number): string {
+  const d = new Date(date + 'T00:00:00');
+  return `${DAY_SHORT[di]} ${d.getDate()} — ${d.toLocaleString('default', { month: 'long' })} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+// ── Hour-cell logic ───────────────────────────────────────────────────────────
 
 interface HourCell {
-  hour: string;           
-  status: string;         
+  hour: string;
+  status: string;
   taskId?: string;
-  filledUnits: number;   
-  totalFilledUnits: number; 
-  span: number;           
-  fillPercent: number;    
+  filledUnits: number;
+  totalFilledUnits: number;
+  span: number;
+  fillPercent: number;
 }
 
 function toMinutes(time: string): number {
@@ -22,7 +64,6 @@ function toMinutes(time: string): number {
 }
 
 function buildHourCells(daySlots: ScheduleSlot[]): HourCell[] {
- 
   const subSlotMap: Record<string, { status: string; taskId?: string }> = {};
 
   for (const slot of daySlots) {
@@ -59,7 +100,6 @@ function buildHourCells(daySlots: ScheduleSlot[]): HourCell[] {
     return { hour, status, taskId, filledUnits, totalFilledUnits: filledUnits, span: 1, fillPercent: 0 };
   });
 
-  // Merge consecutive cells with same taskId & status (including partial last cell)
   const cells: HourCell[] = rawCells.map(c => ({ ...c }));
   const absorbed = new Set<number>();
 
@@ -73,7 +113,6 @@ function buildHourCells(daySlots: ScheduleSlot[]): HourCell[] {
 
     for (let j = i + 1; j < cells.length; j++) {
       const next = cells[j];
-      // Merge if same task+status AND next cell has ANY filled units (including partial)
       if (
         next.status === cell.status &&
         next.taskId === cell.taskId &&
@@ -82,7 +121,7 @@ function buildHourCells(daySlots: ScheduleSlot[]): HourCell[] {
         span++;
         totalFilledUnits += next.filledUnits;
         absorbed.add(j);
-        cells[j].span = 0; 
+        cells[j].span = 0;
       } else {
         break;
       }
@@ -90,13 +129,13 @@ function buildHourCells(daySlots: ScheduleSlot[]): HourCell[] {
 
     cells[i].span = span;
     cells[i].totalFilledUnits = totalFilledUnits;
-    // fillPercent: filled units out of total possible (span × 2 half-slots)
     cells[i].fillPercent = Math.round((totalFilledUnits / (span * 2)) * 100);
   }
 
-  // For available cells, fillPercent stays 0
   return cells.filter(c => c.span !== 0);
 }
+
+// ── Main component ────────────────────────────────────────────────────────────
 
 interface DailyViewProps {
   slots: ScheduleSlot[];
@@ -105,138 +144,209 @@ interface DailyViewProps {
 }
 
 export default function DailyView({ slots, workers, tasks }: DailyViewProps) {
+  const [monday, setMonday] = useState<Date>(() => getMondayOf(new Date()));
+
+  const dates      = getWeekDates(monday);
+  const weekLabel  = formatWeekRange(dates);
+  const today      = toISODate(new Date());
+  const isThisWeek = dates.includes(today);
+
+  function prevWeek() {
+    setMonday(prev => { const d = new Date(prev); d.setDate(d.getDate() - 7); return d; });
+  }
+  function nextWeek() {
+    setMonday(prev => { const d = new Date(prev); d.setDate(d.getDate() + 7); return d; });
+  }
+  function goToday() {
+    setMonday(getMondayOf(new Date()));
+  }
+
   return (
     <div className="space-y-4">
-      {DATES.map((date, di) => (
-        <div key={date} className="glass rounded-xl p-5">
-          <h3 className="text-sm font-semibold text-foreground mb-3">
-            {DAY_LABELS[di]} — March {date.slice(8)}, 2026
-          </h3>
-          <div className="overflow-x-auto scrollbar-thin">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr>
-                  <th className="text-[10px] uppercase tracking-wider text-muted-foreground p-2 text-left w-40 font-medium">
-                    Worker
-                  </th>
-                  {TIME_SLOTS.map(s => (
-                    <th key={s} className="text-[10px] text-muted-foreground p-2 text-center font-normal min-w-[60px]">
-                      {s}
+      {/* ── Week navigation header ── */}
+      <div className="flex items-center justify-between gap-3 flex-wrap px-1">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={prevWeek}
+            className="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            title="Previous week"
+          >
+            <ChevronLeft size={15} />
+          </button>
+
+          <span className="text-sm font-semibold text-foreground min-w-[180px] text-center">
+            {weekLabel}
+          </span>
+
+          <button
+            onClick={nextWeek}
+            className="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            title="Next week"
+          >
+            <ChevronRight size={15} />
+          </button>
+
+          {!isThisWeek && (
+            <button
+              onClick={goToday}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              title="Go to current week"
+            >
+              <CalendarDays size={11} />
+              Today
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── One card per day ── */}
+      {dates.map((date, di) => {
+        const isToday = date === today;
+        const d = new Date(date + 'T00:00:00');
+        const dayHeading = `${DAY_SHORT[di]} ${d.getDate()} — ${d.toLocaleString('default', { month: 'long' })} ${d.getDate()}, ${d.getFullYear()}`;
+
+        return (
+          <div
+            key={date}
+            className={`glass rounded-xl p-5 ${isToday ? 'ring-1 ring-primary/40' : ''}`}
+          >
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              {isToday && (
+                <span
+                  className="inline-block w-1.5 h-1.5 rounded-full"
+                  style={{ backgroundColor: 'var(--color-primary,#3b82f6)' }}
+                />
+              )}
+              <span className={isToday ? 'text-primary' : 'text-foreground'}>
+                {dayHeading}
+              </span>
+              {isToday && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">
+                  Today
+                </span>
+              )}
+            </h3>
+
+            <div className="overflow-x-auto scrollbar-thin">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="text-[10px] uppercase tracking-wider text-muted-foreground p-2 text-left w-40 font-medium">
+                      Worker
                     </th>
-                  ))}
-                  <th className="text-[10px] uppercase tracking-wider text-muted-foreground p-2 text-right font-medium">
-                    Load
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {workers.map(worker => {
-                  const daySlots = slots.filter(s => s.workerId === worker.id && s.date === date);
-                  const wl = getWorkerWorkload(slots, worker.id, date, TOTAL_HOURS);
-                  const cells = buildHourCells(daySlots);
+                    {TIME_SLOTS.map(s => (
+                      <th key={s} className="text-[10px] text-muted-foreground p-2 text-center font-normal min-w-[60px]">
+                        {s}
+                      </th>
+                    ))}
+                    <th className="text-[10px] uppercase tracking-wider text-muted-foreground p-2 text-right font-medium">
+                      Load
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workers.map(worker => {
+                    const daySlots = slots.filter(
+                      s => String(s.workerId) === String(worker.id) && s.date === date
+                    );
+                    const wl    = getWorkerWorkload(slots, worker.id, date, TOTAL_HOURS);
+                    const cells = buildHourCells(daySlots);
 
-                  return (
-                    <tr key={worker.id} className="border-t border-border/30">
-                      {/* Worker info */}
-                      <td className="p-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-[10px] font-medium text-secondary-foreground shrink-0">
-                            {worker.avatar}
+                    return (
+                      <tr key={worker.id} className="border-t border-border/30">
+                        {/* Worker info */}
+                        <td className="p-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-[10px] font-medium text-secondary-foreground shrink-0">
+                              {worker.avatar}
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium text-foreground">{worker.name.split(' ')[0]}</p>
+                              <p className="text-[10px] text-muted-foreground">{worker.role}</p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-xs font-medium text-foreground">{worker.name.split(' ')[0]}</p>
-                            <p className="text-[10px] text-muted-foreground">{worker.role}</p>
-                          </div>
-                        </div>
-                      </td>
+                        </td>
 
-                      {/* Hour cells */}
-                      {cells.map(({ hour, status, taskId, fillPercent, span }) => {
-                        const task = taskId ? tasks.find(t => t.id === taskId) : null;
+                        {/* Hour cells */}
+                        {cells.map(({ hour, status, taskId, fillPercent, span }) => {
+                          const task = taskId ? tasks.find(t => t.id === taskId) : null;
 
-                        // Label shown inside the capsule
-                        const label = (() => {
-                          if (status === 'allocated' && task) {
-                            const maxChars = 10 * span;
-                            return task.title.length > maxChars
-                              ? task.title.slice(0, maxChars) + '..'
-                              : task.title;
-                          }
-                          if (status === 'leave') return 'On Leave';
-                          return '';
-                        })();
+                          const label = (() => {
+                            if (status === 'allocated' && task) {
+                              const maxChars = 10 * span;
+                              return task.title.length > maxChars
+                                ? task.title.slice(0, maxChars) + '..'
+                                : task.title;
+                            }
+                            if (status === 'leave') return 'On Leave';
+                            return '';
+                          })();
 
-                        const filledClass =
-                          status === 'allocated'
-                            ? 'slot-allocated'
-                            : status === 'leave'
-                            ? 'slot-leave'
-                            : status === 'blocked'
-                            ? 'slot-blocked'
+                          const filledClass =
+                            status === 'allocated' ? 'slot-allocated'
+                            : status === 'leave'    ? 'slot-leave'
+                            : status === 'blocked'  ? 'slot-blocked'
                             : 'slot-available';
 
-                        return (
-                          <td key={hour} colSpan={span} className="p-1">
-                            {fillPercent === 100 || fillPercent === 0 ? (
-                              /* ── Fully filled or fully available ── */
-                              <div
-                                className={`h-9 rounded-md flex items-center justify-center text-[9px] font-medium transition-colors ${filledClass}`}
-                                title={task ? task.title : status}
-                              >
-                                {fillPercent > 0 && label ? label : ''}
-                              </div>
-                            ) : (
-                              /* ── Partial fill — outer div has border/radius, inner divs have bg only ── */
-                              <div
-                                className={`h-9 rounded-md overflow-hidden flex border ${
-                                  status === 'allocated' ? 'border-primary/40'
-                                  : status === 'leave' ? 'border-warning/30'
-                                  : status === 'blocked' ? 'border-destructive/30'
-                                  : 'border-success/30'
-                                }`}
-                                title={task ? task.title : status}
-                              >
-                                {/* Filled portion — bg only, no border */}
+                          return (
+                            <td key={hour} colSpan={span} className="p-1">
+                              {fillPercent === 100 || fillPercent === 0 ? (
                                 <div
-                                  className={`h-full flex items-center justify-center text-[9px] font-medium ${
-                                    status === 'allocated' ? 'bg-primary/20 text-primary'
-                                    : status === 'leave' ? 'bg-warning/15 text-warning'
-                                    : status === 'blocked' ? 'bg-destructive/15 text-destructive'
-                                    : 'bg-success/15 text-success'
-                                  }`}
-                                  style={{ width: `${fillPercent}%` }}
+                                  className={`h-9 rounded-md flex items-center justify-center text-[9px] font-medium transition-colors ${filledClass}`}
+                                  title={task ? task.title : status}
                                 >
-                                  {label ? <span className="px-1 truncate">{label}</span> : null}
+                                  {fillPercent > 0 && label ? label : ''}
                                 </div>
-                                {/* Available portion — bg only, no border */}
+                              ) : (
                                 <div
-                                  className="h-full bg-success/15"
-                                  style={{ width: `${100 - fillPercent}%` }}
-                                />
-                              </div>
-                            )}
-                          </td>
-                        );
-                      })}
+                                  className={`h-9 rounded-md overflow-hidden flex border ${
+                                    status === 'allocated' ? 'border-primary/40'
+                                    : status === 'leave'   ? 'border-warning/30'
+                                    : status === 'blocked' ? 'border-destructive/30'
+                                    : 'border-success/30'
+                                  }`}
+                                  title={task ? task.title : status}
+                                >
+                                  <div
+                                    className={`h-full flex items-center justify-center text-[9px] font-medium ${
+                                      status === 'allocated' ? 'bg-primary/20 text-primary'
+                                      : status === 'leave'   ? 'bg-warning/15 text-warning'
+                                      : status === 'blocked' ? 'bg-destructive/15 text-destructive'
+                                      : 'bg-success/15 text-success'
+                                    }`}
+                                    style={{ width: `${fillPercent}%` }}
+                                  >
+                                    {label ? <span className="px-1 truncate">{label}</span> : null}
+                                  </div>
+                                  <div
+                                    className="h-full bg-success/15"
+                                    style={{ width: `${100 - fillPercent}%` }}
+                                  />
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
 
-                      {/* Workload % */}
-                      <td className="p-2 text-right">
-                        <span
-                          className={`text-xs font-semibold ${
-                            wl > 80 ? 'text-destructive' : wl > 50 ? 'text-warning' : 'text-success'
-                          }`}
-                        >
-                          {wl}%
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        {/* Workload % */}
+                        <td className="p-2 text-right">
+                          <span
+                            className={`text-xs font-semibold ${
+                              wl > 80 ? 'text-destructive' : wl > 50 ? 'text-warning' : 'text-success'
+                            }`}
+                          >
+                            {wl}%
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
