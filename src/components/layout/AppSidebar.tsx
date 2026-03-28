@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { useLocation, Link } from 'react-router-dom';
 import {
   DashboardIcon,
   KanbanIcon,
@@ -35,16 +34,41 @@ const MemberTasksIcon = ({ size = 18, className = '' }: { size?: number; classNa
   </svg>
 );
 
+// Project Registry icon — briefcase + grid
+const ProjectRegistryIcon = ({ size = 18, className = '' }: { size?: number; className?: string }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.75}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <rect x="2" y="7" width="20" height="14" rx="2" />
+    <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" />
+    <line x1="8" y1="12" x2="8" y2="12.01" />
+    <line x1="12" y1="12" x2="16" y2="12" />
+    <line x1="8" y1="16" x2="8" y2="16.01" />
+    <line x1="12" y1="16" x2="16" y2="16" />
+  </svg>
+);
+
 const navItems = [
-  { label: 'Dashboard',          path: '/',             icon: DashboardIcon },
-  { label: 'Workforce Planning', path: '/planning',     icon: PlanningIcon },
-  { label: 'Kanban Board',       path: '/kanban',       icon: KanbanIcon },
-  { label: 'Workers',            path: '/workers',      icon: WorkersIcon },
-  { label: 'Member Tasks',       path: '/member-tasks', icon: MemberTasksIcon },
-  { label: 'Tasks',              path: '/tasks',        icon: TasksIcon },
-  { label: 'Schedule',           path: '/schedule',     icon: ScheduleIcon },
-  { label: 'KPI Setup',          path: '/kpi-setup',    icon: KPISetupIcon },
-  { label: 'KPI Reporting',      path: '/kpi-reporting',icon: KPIReportIcon },
+  { label: 'Dashboard',          path: '/',                 icon: DashboardIcon },
+  { label: 'Workforce Planning', path: '/planning',         icon: PlanningIcon },
+  { label: 'Kanban Board',       path: '/kanban',           icon: KanbanIcon },
+  { label: 'Workers',            path: '/workers',          icon: WorkersIcon },
+   { label: 'Projects ',   path: '/projects', icon: ProjectRegistryIcon },
+  { label: 'Member Tasks',       path: '/member-tasks',     icon: MemberTasksIcon },
+
+  { label: 'Tasks',              path: '/tasks',            icon: TasksIcon },
+ 
+  { label: 'Schedule',           path: '/schedule',         icon: ScheduleIcon },
+  { label: 'KPI Setup',          path: '/kpi-setup',        icon: KPISetupIcon },
+  { label: 'KPI Reporting',      path: '/kpi-reporting',    icon: KPIReportIcon },
 ];
 
 export default function AppSidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {

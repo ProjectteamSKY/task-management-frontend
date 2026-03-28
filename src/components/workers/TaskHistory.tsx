@@ -1,19 +1,42 @@
-import { useState, useMemo } from 'react';
-import { tasks } from '@/data/mockData';
-import { SearchIcon, StarIcon, ClockIcon } from '@/components/icons/Icons';
+import { useState, useEffect, useMemo } from 'react';
+import { assignmentService } from '@/services/taskassignmentService';
+import { SearchIcon, ClockIcon } from '@/components/icons/Icons';
 import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
+  Table, TableHeader, TableBody, TableHead, TableRow, TableCell,
 } from '@/components/ui/table';
 
 // ─── Types & constants ────────────────────────────────────────────────────────
 
-type SortKey = 'dueDate' | 'priority' | 'status' | 'estimatedHours' | 'quality';
+type SortKey = 'dueDate' | 'priority' | 'status' | 'estimatedHours' | 'allocatedHours';
 type SortDir = 'asc' | 'desc';
+
+interface TaskRow {
+  id: number;
+  taskId: number;
+  title: string;
+  status: string;
+  priority: string;
+  dueDate: string;
+  estimatedHours: number;
+  allocatedHours: number;
+  taskType: string;
+  projectName: string | null;
+}
+
+function normaliseAssignment(a: any): TaskRow {
+  return {
+    id:             a.id,
+    taskId:         a.task_id,
+    title:          a.task_title,
+    status:         a.task_status,
+    priority:       a.task_priority,
+    dueDate:        a.assigned_date ?? '',
+    estimatedHours: a.estimated_hours,
+    allocatedHours: a.allocated_hours,
+    taskType:       a.task_type,
+    projectName:    a.project_name ?? null,
+  };
+}
 
 const PRIORITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 
@@ -28,12 +51,10 @@ const STATUS_STYLES: Record<string, string> = {
   done:        'bg-success/15 text-success',
   in_progress: 'bg-warning/15 text-warning',
   review:      'bg-primary/15 text-primary',
+  pending:     'bg-blue-500/15 text-blue-400',
   todo:        'bg-secondary text-muted-foreground',
   backlog:     'bg-secondary text-muted-foreground',
 };
-
-const qualityColor = (q: number) =>
-  q >= 4.5 ? 'text-success' : q >= 3.5 ? 'text-warning' : 'text-destructive';
 
 const inputCls =
   'flex h-9 rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ' +
@@ -43,12 +64,12 @@ const inputCls =
 // ─── Column definitions ───────────────────────────────────────────────────────
 
 const COLUMNS: { label: string; sortKey: SortKey | null }[] = [
-  { label: 'Task',              sortKey: null              },
-  { label: 'Status',            sortKey: 'status'          },
-  { label: 'Priority',          sortKey: 'priority'        },
-  { label: 'Due Date',          sortKey: 'dueDate'         },
-  { label: 'Hours (est / act)', sortKey: 'estimatedHours'  },
-  { label: 'Quality',           sortKey: 'quality'         },
+  { label: 'Task',              sortKey: null               },
+  { label: 'Status',            sortKey: 'status'           },
+  { label: 'Priority',          sortKey: 'priority'         },
+  { label: 'Due Date',          sortKey: 'dueDate'          },
+  { label: 'Est / Alloc Hours', sortKey: 'estimatedHours'   },
+  { label: 'Project',           sortKey: null               },
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -58,6 +79,10 @@ interface TaskHistoryProps {
 }
 
 export default function TaskHistory({ workerId }: TaskHistoryProps) {
+  const [tasks,          setTasks]          = useState<TaskRow[]>([]);
+  const [loading,        setLoading]        = useState(true);
+  const [error,          setError]          = useState<string | null>(null);
+
   const [search,         setSearch]         = useState('');
   const [statusFilter,   setStatusFilter]   = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
@@ -66,17 +91,26 @@ export default function TaskHistory({ workerId }: TaskHistoryProps) {
   const [sortKey,        setSortKey]        = useState<SortKey>('dueDate');
   const [sortDir,        setSortDir]        = useState<SortDir>('desc');
 
-  const workerTasks = tasks.filter(t => t.assignedWorkers.includes(workerId));
+  // ── Fetch assignments for this worker ──
+  useEffect(() => {
+    if (!workerId) return;
+    setLoading(true);
+    setError(null);
 
+    assignmentService
+      .getAssignmentsByWorker(Number(workerId))
+      .then(data => setTasks(data.map(normaliseAssignment)))
+      .catch(err => setError(err.message ?? 'Failed to load tasks'))
+      .finally(() => setLoading(false));
+  }, [workerId]);
+
+  // ── Filter + sort ──
   const filtered = useMemo(() => {
-    let list = [...workerTasks];
+    let list = [...tasks];
 
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter(
-        t => t.title.toLowerCase().includes(q) ||
-             (t.description ?? '').toLowerCase().includes(q),
-      );
+      list = list.filter(t => t.title.toLowerCase().includes(q));
     }
     if (statusFilter   !== 'all') list = list.filter(t => t.status   === statusFilter);
     if (priorityFilter !== 'all') list = list.filter(t => t.priority === priorityFilter);
@@ -89,12 +123,12 @@ export default function TaskHistory({ workerId }: TaskHistoryProps) {
       if (sortKey === 'priority')       cmp = (PRIORITY_RANK[a.priority] ?? 0) - (PRIORITY_RANK[b.priority] ?? 0);
       if (sortKey === 'status')         cmp = a.status.localeCompare(b.status);
       if (sortKey === 'estimatedHours') cmp = a.estimatedHours - b.estimatedHours;
-      if (sortKey === 'quality')        cmp = (a.qualityScore ?? 0) - (b.qualityScore ?? 0);
+      if (sortKey === 'allocatedHours') cmp = a.allocatedHours - b.allocatedHours;
       return sortDir === 'asc' ? cmp : -cmp;
     });
 
     return list;
-  }, [workerTasks, search, statusFilter, priorityFilter, dateFrom, dateTo, sortKey, sortDir]);
+  }, [tasks, search, statusFilter, priorityFilter, dateFrom, dateTo, sortKey, sortDir]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
@@ -119,11 +153,28 @@ export default function TaskHistory({ workerId }: TaskHistoryProps) {
       <span className="ml-1 text-muted-foreground/30">↕</span>
     );
 
+  // ── Loading / error states ──
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
+        Loading tasks…
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-20 text-sm text-destructive">
+        {error}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* ── Filter bar ── */}
       <div className="glass rounded-xl p-4 space-y-3">
-        {/* Row 1 — search, status, priority, result count */}
+        {/* Row 1 */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 bg-secondary/50 rounded-lg px-3 py-2 w-56">
             <SearchIcon size={13} className="text-muted-foreground shrink-0" />
@@ -142,6 +193,7 @@ export default function TaskHistory({ workerId }: TaskHistoryProps) {
             className={inputCls + ' w-36'}
           >
             <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
             <option value="done">Done</option>
             <option value="in_progress">In Progress</option>
             <option value="review">Review</option>
@@ -168,7 +220,7 @@ export default function TaskHistory({ workerId }: TaskHistoryProps) {
 
         {/* Row 2 — date range */}
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[11px] text-muted-foreground">Due date</span>
+          <span className="text-[11px] text-muted-foreground">Assigned date</span>
           <input
             type="date"
             value={dateFrom}
@@ -201,12 +253,14 @@ export default function TaskHistory({ workerId }: TaskHistoryProps) {
               <ClockIcon size={18} className="text-muted-foreground" />
             </div>
             <p className="text-sm text-muted-foreground">No tasks match your filters</p>
-            <button
-              onClick={clearAll}
-              className="mt-2 text-xs text-primary hover:text-primary/70 transition-colors"
-            >
-              Clear all filters
-            </button>
+            {hasActiveFilters && (
+              <button
+                onClick={clearAll}
+                className="mt-2 text-xs text-primary hover:text-primary/70 transition-colors"
+              >
+                Clear all filters
+              </button>
+            )}
           </div>
         ) : (
           <div className="max-h-[480px] overflow-y-auto scrollbar-thin">
@@ -231,14 +285,12 @@ export default function TaskHistory({ workerId }: TaskHistoryProps) {
               <TableBody>
                 {filtered.map(t => (
                   <TableRow key={t.id}>
-                    {/* Task name + description */}
+                    {/* Task name + type */}
                     <TableCell className="max-w-[220px]">
                       <p className="text-sm text-foreground font-medium truncate">{t.title}</p>
-                      {t.description && (
-                        <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                          {t.description}
-                        </p>
-                      )}
+                      <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+                        {t.taskType.replace('_', ' ')}
+                      </p>
                     </TableCell>
 
                     {/* Status */}
@@ -255,42 +307,29 @@ export default function TaskHistory({ workerId }: TaskHistoryProps) {
                       </span>
                     </TableCell>
 
-                    {/* Due date */}
+                    {/* Assigned date */}
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                      {t.dueDate}
+                      {t.dueDate || '—'}
                     </TableCell>
 
-                    {/* Hours est / actual */}
+                    {/* Est / Allocated hours */}
                     <TableCell>
                       <div className="flex items-center gap-1 text-xs">
                         <span className="text-foreground">{t.estimatedHours}h</span>
-                        {t.actualHours != null && (
-                          <>
-                            <span className="text-muted-foreground/40">/</span>
-                            <span className={
-                              t.actualHours > t.estimatedHours ? 'text-destructive' :
-                              t.actualHours < t.estimatedHours ? 'text-success'     :
-                                                                  'text-muted-foreground'
-                            }>
-                              {t.actualHours}h
-                            </span>
-                          </>
-                        )}
+                        <span className="text-muted-foreground/40">/</span>
+                        <span className={
+                          t.allocatedHours > t.estimatedHours ? 'text-destructive' :
+                          t.allocatedHours < t.estimatedHours ? 'text-success'     :
+                                                                 'text-muted-foreground'
+                        }>
+                          {t.allocatedHours}h
+                        </span>
                       </div>
                     </TableCell>
 
-                    {/* Quality */}
-                    <TableCell>
-                      {t.qualityScore != null ? (
-                        <div className="flex items-center gap-1">
-                          <StarIcon size={11} className={qualityColor(t.qualityScore)} />
-                          <span className={`text-xs font-medium ${qualityColor(t.qualityScore)}`}>
-                            {t.qualityScore.toFixed(1)}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-[11px] text-muted-foreground/40">—</span>
-                      )}
+                    {/* Project */}
+                    <TableCell className="text-xs text-muted-foreground">
+                      {t.projectName ?? <span className="text-muted-foreground/40">—</span>}
                     </TableCell>
                   </TableRow>
                 ))}

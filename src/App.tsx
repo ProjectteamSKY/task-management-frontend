@@ -14,6 +14,7 @@ import WorkforcePlanning from "./pages/WorkforcePlanning";
 import KPISetup from "./pages/KPISetup";
 import KPIReporting from "./pages/KPIReporting";
 import MemberTasks from "./pages/MembersTask";
+import Projects from "./pages/Projects";
 import NotFound from "./pages/NotFound";
 import WorkerCompare from "./pages/Workercompare";
 
@@ -35,6 +36,7 @@ const App = () => (
             <Route path="/workers/compare" element={<WorkerCompare />} />
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/member-tasks" element={<MemberTasks />} />
+            <Route path="/projects" element={<Projects />} />
             <Route path="/schedule" element={<Schedule />} />
             <Route path="/kpi-setup" element={<KPISetup />} />
             <Route path="/kpi-reporting" element={<KPIReporting />} />
