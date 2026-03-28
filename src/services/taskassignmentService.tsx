@@ -1,4 +1,4 @@
-const BASE_URL = 'http://127.0.0.1:8000/assignments';
+const BASE_URL = `${import.meta.env.VITE_API_BASE_URL}/assignments`;
 
 function toFormData(data: Record<string, any>): FormData {
   const fd = new FormData();

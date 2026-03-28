@@ -1,5 +1,4 @@
-const WORKER_BASE = 'http://127.0.0.1:8000/workers';
-const CAP_BASE    = 'http://127.0.0.1:8000/workers';   // /workers/{id}/capabilities
+const WORKER_BASE = `${import.meta.env.VITE_API_BASE_URL}/workers`;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -57,6 +56,24 @@ export interface NormalisedCapability {
   proficiency: number;
 }
 
+export interface EmergencyContactPayload {
+  full_name:     string;
+  phone:         string;
+  relationship?: string;
+  email?:        string;
+  address?:      string;
+}
+
+export interface NormalisedEmergencyContact {
+  id:           number;
+  workerId:     number;
+  fullName:     string;
+  relationship: string;
+  phone:        string;
+  email:        string;
+  address:      string;
+}
+
 // ─── Normalisers ──────────────────────────────────────────────────────────────
 
 function normaliseWorker(w: any): NormalisedWorker {
@@ -78,6 +95,18 @@ function normaliseCapability(c: any): NormalisedCapability {
     workerId:    String(c.worker_id),
     capability:  c.capability,
     proficiency: c.proficiency,
+  };
+}
+
+function normaliseEmergencyContact(c: any): NormalisedEmergencyContact {
+  return {
+    id:           c.id,
+    workerId:     c.worker_id,
+    fullName:     c.full_name    ?? '',
+    relationship: c.relationship ?? '',
+    phone:        c.phone        ?? '',
+    email:        c.email        ?? '',
+    address:      c.address      ?? '',
   };
 }
 
@@ -141,20 +170,40 @@ export const workerService = {
     if (!res.ok) throw new Error('Failed to fetch workers with tasks');
     return res.json();
   },
+
+  async getEmergencyContact(workerId: number): Promise<NormalisedEmergencyContact | null> {
+    const res = await fetch(`${WORKER_BASE}/${workerId}/emergency-contact`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error('Failed to fetch emergency contact');
+    return normaliseEmergencyContact(await res.json());
+  },
+
+  async upsertEmergencyContact(workerId: number, data: EmergencyContactPayload): Promise<NormalisedEmergencyContact> {
+    const res = await fetch(`${WORKER_BASE}/${workerId}/emergency-contact`, {
+      method: 'PUT',
+      body:   toFormData(data as Record<string, any>),
+    });
+    if (!res.ok) throw new Error('Failed to save emergency contact');
+    return normaliseEmergencyContact(await res.json());
+  },
+
+  async deleteEmergencyContact(workerId: number): Promise<void> {
+    const res = await fetch(`${WORKER_BASE}/${workerId}/emergency-contact`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete emergency contact');
+  },
 };
 
 // ─── Capability service ───────────────────────────────────────────────────────
 
 export const capabilityService = {
   async getCapabilities(workerId: number): Promise<NormalisedCapability[]> {
-    const res = await fetch(`${CAP_BASE}/${workerId}/capabilities`);
+    const res = await fetch(`${WORKER_BASE}/${workerId}/capabilities`);
     if (!res.ok) throw new Error('Failed to fetch capabilities');
     return (await res.json()).map(normaliseCapability);
   },
 
-  /** Bulk-insert — used on Add Worker (one round-trip for all skills) */
   async bulkCreate(workerId: number, capabilities: CapabilityItem[]): Promise<NormalisedCapability[]> {
-    const res = await fetch(`${CAP_BASE}/${workerId}/capabilities/bulk`, {
+    const res = await fetch(`${WORKER_BASE}/${workerId}/capabilities/bulk`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ capabilities }),
@@ -163,16 +212,10 @@ export const capabilityService = {
     return (await res.json()).map(normaliseCapability);
   },
 
-  /** Replace strategy — wipe + re-insert (used on Edit Worker save) */
   async replaceAll(workerId: number, capabilities: CapabilityItem[]): Promise<NormalisedCapability[]> {
-    // 1. Delete all existing
-    const del = await fetch(`${CAP_BASE}/${workerId}/capabilities`, { method: 'DELETE' });
+    const del = await fetch(`${WORKER_BASE}/${workerId}/capabilities`, { method: 'DELETE' });
     if (!del.ok) throw new Error('Failed to clear capabilities');
-
-    // 2. Skip bulk insert if list is empty
     if (capabilities.length === 0) return [];
-
-    // 3. Re-insert fresh list
     return capabilityService.bulkCreate(workerId, capabilities);
   },
 };

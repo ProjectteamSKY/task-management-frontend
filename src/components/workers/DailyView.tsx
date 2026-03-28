@@ -1,5 +1,9 @@
-import { useState, useMemo } from 'react';
-import { tasks, scheduleSlots } from '@/data/mockData';
+import { useState, useEffect, useMemo } from 'react';
+import {
+  fetchScheduleData,
+  type ScheduleSlot,
+  type Task,
+} from '@/services/scheduleService';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -9,13 +13,12 @@ interface DailyViewProps {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DAY_START    = 9;    // 09:00
-const DAY_END      = 17;   // 17:00
-const SLOT_MIN     = 30;   // 30-min grid resolution
-const SLOT_PX      = 40;   // px per 30-min slot
-const TOTAL_SLOTS  = (DAY_END - DAY_START) * 2;   // 16 slots (9:00–17:00)
+const DAY_START   = 9;
+const DAY_END     = 17;
+const SLOT_MIN    = 30;
+const SLOT_PX     = 40;
+const TOTAL_SLOTS = (DAY_END - DAY_START) * 2;
 
-// All 30-min labels from 09:00 to 17:00
 const TIME_LABELS = Array.from({ length: TOTAL_SLOTS + 1 }, (_, i) => {
   const totalMins = DAY_START * 60 + i * SLOT_MIN;
   const h = Math.floor(totalMins / 60);
@@ -64,20 +67,25 @@ function getWeekDates(anchor: Date): Date[] {
   });
 }
 
-/** Convert "HH:MM" → minutes since midnight */
 function toMins(time: string): number {
   const [h, m] = time.split(':').map(Number);
   return h * 60 + m;
 }
 
-/** Minutes since DAY_START → pixel offset */
 function minsToTop(mins: number): number {
   return ((mins - DAY_START * 60) / SLOT_MIN) * SLOT_PX;
 }
 
-/** Duration in minutes → pixel height */
 function minsToHeight(mins: number): number {
   return (mins / SLOT_MIN) * SLOT_PX;
+}
+
+/** Derive slot duration in minutes — prefer endTime, fall back to durationUnits */
+function slotDurationMins(slot: ScheduleSlot): number {
+  if (slot.endTime && slot.startTime) {
+    return toMins(slot.endTime) - toMins(slot.startTime);
+  }
+  return slot.durationUnits * SLOT_MIN;
 }
 
 // ─── Legend ───────────────────────────────────────────────────────────────────
@@ -98,58 +106,81 @@ function Legend() {
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function DailyView({ workerId }: DailyViewProps) {
-  const today     = useMemo(() => new Date(), []);
+  const today = useMemo(() => new Date(), []);
   const [selected, setSelected] = useState<Date>(today);
+
+  // ── API state ──
+  const [allSlots, setAllSlots] = useState<ScheduleSlot[]>([]);
+  const [taskMap,  setTaskMap]  = useState<Record<string, Task>>({});
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState<string | null>(null);
+
+  // ── Fetch on mount / workerId change ──
+  useEffect(() => {
+    if (!workerId) return;
+    setLoading(true);
+    setError(null);
+
+    fetchScheduleData()
+      .then(data => {
+        // Keep only slots for this worker
+        setAllSlots(data.slots.filter(s => s.workerId === workerId));
+
+        // Build taskId → Task lookup
+        const map: Record<string, Task> = {};
+        data.tasks.forEach(t => { map[t.id] = t; });
+        setTaskMap(map);
+      })
+      .catch(err => setError(err.message ?? 'Failed to load schedule'))
+      .finally(() => setLoading(false));
+  }, [workerId]);
 
   const weekDates   = useMemo(() => getWeekDates(selected), [selected]);
   const selectedISO = toISO(selected);
 
-  // All slots for this worker on the selected day
+  // Slots for selected day only
   const daySlots = useMemo(
-    () => scheduleSlots.filter(s => s.workerId === workerId && s.date === selectedISO),
-    [workerId, selectedISO],
+    () => allSlots.filter(s => s.date === selectedISO),
+    [allSlots, selectedISO],
   );
 
-  // Build positioned task blocks from slots
+  // Positioned task blocks
   const taskBlocks = useMemo(() => {
     return daySlots
       .filter(s => s.status !== 'available')
       .map(slot => {
-        const startMins = toMins(slot.startTime);
-        const endMins   = toMins(slot.endTime);
-        const duration  = endMins - startMins;
-        const task      = slot.taskId ? tasks.find(t => t.id === slot.taskId) : null;
-        const style     = SLOT_STYLES[slot.status] ?? SLOT_STYLES.available;
+        const startMins  = toMins(slot.startTime);
+        const duration   = slotDurationMins(slot);
+        const task       = slot.taskId ? taskMap[slot.taskId] : null;
+        const style      = SLOT_STYLES[slot.status] ?? SLOT_STYLES.available;
         return {
           slot,
           task,
           style,
-          top:    minsToTop(startMins),
-          height: minsToHeight(duration),
+          top:          minsToTop(startMins),
+          height:       minsToHeight(duration),
           durationMins: duration,
         };
       });
-  }, [daySlots]);
+  }, [daySlots, taskMap]);
 
-  // Summary for the day
+  // Day summary
   const summary = useMemo(() => {
-    const allocatedMins = daySlots
-      .filter(s => s.status === 'allocated')
-      .reduce((sum, s) => sum + (toMins(s.endTime) - toMins(s.startTime)), 0);
-    const leaveMins = daySlots
-      .filter(s => s.status === 'leave')
-      .reduce((sum, s) => sum + (toMins(s.endTime) - toMins(s.startTime)), 0);
-    const blockedMins = daySlots
-      .filter(s => s.status === 'blocked')
-      .reduce((sum, s) => sum + (toMins(s.endTime) - toMins(s.startTime)), 0);
-    const totalWorkMins   = (DAY_END - DAY_START) * 60;
-    const occupiedMins    = allocatedMins + leaveMins + blockedMins;
-    const freeMins        = Math.max(0, totalWorkMins - occupiedMins);
+    const calc = (status: string) =>
+      daySlots
+        .filter(s => s.status === status)
+        .reduce((sum, s) => sum + slotDurationMins(s), 0);
+
+    const allocatedMins = calc('allocated');
+    const leaveMins     = calc('leave');
+    const blockedMins   = calc('blocked');
+    const freeMins      = Math.max(0, (DAY_END - DAY_START) * 60 - allocatedMins - leaveMins - blockedMins);
+
     return {
       allocatedH: (allocatedMins / 60).toFixed(1),
-      leaveH:     (leaveMins    / 60).toFixed(1),
-      blockedH:   (blockedMins  / 60).toFixed(1),
-      freeH:      (freeMins     / 60).toFixed(1),
+      leaveH:     (leaveMins     / 60).toFixed(1),
+      blockedH:   (blockedMins   / 60).toFixed(1),
+      freeH:      (freeMins      / 60).toFixed(1),
       taskCount:  daySlots.filter(s => s.status === 'allocated').length,
     };
   }, [daySlots]);
@@ -157,7 +188,7 @@ export default function DailyView({ workerId }: DailyViewProps) {
   const isToday = (d: Date) => toISO(d) === toISO(today);
   const isSel   = (d: Date) => toISO(d) === selectedISO;
 
-  // Current time indicator position
+  // Current time indicator
   const nowIndicator = useMemo(() => {
     if (!isToday(selected)) return null;
     const now     = new Date();
@@ -167,10 +198,27 @@ export default function DailyView({ workerId }: DailyViewProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
+  // ── Loading / error ──
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-20 text-sm text-destructive">
+        {error}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
 
-      {/* ── Week strip ─────────────────────────────────────────────────────── */}
+      {/* ── Week strip ── */}
       <div className="glass rounded-xl p-4">
         <div className="flex items-center justify-between mb-3">
           <button
@@ -195,9 +243,8 @@ export default function DailyView({ workerId }: DailyViewProps) {
         <div className="grid grid-cols-7 gap-1.5">
           {weekDates.map((date, i) => {
             const iso      = toISO(date);
-            const hasTasks = scheduleSlots.some(
-              s => s.workerId === workerId && s.date === iso && s.status === 'allocated',
-            );
+            // Use fetched allSlots for dot indicator
+            const hasTasks = allSlots.some(s => s.date === iso && s.status === 'allocated');
             return (
               <button
                 key={iso}
@@ -223,7 +270,7 @@ export default function DailyView({ workerId }: DailyViewProps) {
         </div>
       </div>
 
-      {/* ── Day summary pills ──────────────────────────────────────────────── */}
+      {/* ── Day summary pills ── */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-foreground">
           {selected.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
@@ -250,7 +297,7 @@ export default function DailyView({ workerId }: DailyViewProps) {
         </div>
       </div>
 
-      {/* ── Timeline ───────────────────────────────────────────────────────── */}
+      {/* ── Timeline ── */}
       <div className="glass rounded-xl p-5">
         <div className="flex items-center justify-between mb-5">
           <h3 className="text-sm font-semibold text-foreground">Daily Schedule</h3>
@@ -259,10 +306,9 @@ export default function DailyView({ workerId }: DailyViewProps) {
 
         <div className="flex gap-0">
 
-          {/* ── Time axis ── */}
+          {/* Time axis */}
           <div className="shrink-0 w-14 select-none relative" style={{ height: TOTAL_SLOTS * SLOT_PX }}>
-            {TIME_LABELS.map((label, i) => (
-              // Only show whole-hour labels (every 2 slots)
+            {TIME_LABELS.map((label, i) =>
               i % 2 === 0 && (
                 <div
                   key={label}
@@ -272,15 +318,15 @@ export default function DailyView({ workerId }: DailyViewProps) {
                   {label}
                 </div>
               )
-            ))}
+            )}
           </div>
 
-          {/* ── Timeline column ── */}
+          {/* Timeline column */}
           <div
             className="relative flex-1 border-l border-border/40"
             style={{ height: TOTAL_SLOTS * SLOT_PX }}
           >
-            {/* Grid lines — solid on each hour, dashed on each half-hour */}
+            {/* Grid lines */}
             {TIME_LABELS.map((label, i) => (
               <div
                 key={label}
@@ -292,13 +338,9 @@ export default function DailyView({ workerId }: DailyViewProps) {
                 style={{ top: i * SLOT_PX }}
               />
             ))}
-            {/* Bottom line */}
-            <div
-              className="absolute left-0 right-0 border-t border-border/40"
-              style={{ top: TOTAL_SLOTS * SLOT_PX }}
-            />
+            <div className="absolute left-0 right-0 border-t border-border/40" style={{ top: TOTAL_SLOTS * SLOT_PX }} />
 
-            {/* ── Empty state ── */}
+            {/* Empty state */}
             {taskBlocks.length === 0 && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
                 <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center">
@@ -308,10 +350,10 @@ export default function DailyView({ workerId }: DailyViewProps) {
               </div>
             )}
 
-            {/* ── Task / slot blocks ── */}
+            {/* Task / slot blocks */}
             {taskBlocks.map(({ slot, task, style, top, height, durationMins }) => {
               const isLeaveOrBlocked = slot.status === 'leave' || slot.status === 'blocked';
-              const isCompact        = height < SLOT_PX * 2; // < 1 hour → compact mode
+              const isCompact        = height < SLOT_PX * 2;
 
               return (
                 <div
@@ -320,59 +362,46 @@ export default function DailyView({ workerId }: DailyViewProps) {
                   style={{ top: top + 2, height: height - 4 }}
                 >
                   {isLeaveOrBlocked ? (
-                    /* Leave / Blocked — simple banner */
                     <div className="flex items-center gap-2 px-3 h-full">
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${style.dot}`} />
                       <span className={`text-xs font-medium ${style.text}`}>{style.label}</span>
                       <span className="text-[10px] text-muted-foreground ml-auto">
-                        {slot.startTime} – {slot.endTime}
+                        {slot.startTime}{slot.endTime ? ` – ${slot.endTime}` : ''}
                       </span>
                     </div>
                   ) : isCompact ? (
-                    /* Compact allocated block (< 1 h) */
                     <div className="flex items-center gap-2 px-3 h-full">
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${style.dot}`} />
                       <span className="text-xs font-semibold text-foreground truncate flex-1">
                         {task?.title ?? 'Task'}
                       </span>
                       <span className="text-[10px] text-muted-foreground shrink-0">
-                        {slot.startTime}–{slot.endTime}
+                        {slot.startTime}{slot.endTime ? `–${slot.endTime}` : ''}
                       </span>
                     </div>
                   ) : (
-                    /* Full allocated block */
                     <div className="px-3 py-2 h-full flex flex-col gap-1 overflow-hidden">
-                      {/* Time range */}
                       <div className="flex items-center gap-1.5">
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${style.dot}`} />
                         <span className="text-[10px] text-muted-foreground">
-                          {slot.startTime} – {slot.endTime}
+                          {slot.startTime}{slot.endTime ? ` – ${slot.endTime}` : ''}
                         </span>
                         <span className="text-[10px] text-muted-foreground ml-auto">
                           {(durationMins / 60).toFixed(1)}h
                         </span>
                       </div>
 
-                      {/* Task title */}
                       <p className={`text-sm font-semibold text-foreground leading-tight ${height < SLOT_PX * 3 ? 'truncate' : ''}`}>
                         {task?.title ?? 'Allocated'}
                       </p>
 
-                      {/* Description — only when tall enough */}
-                      {task?.description && height >= SLOT_PX * 4 && (
-                        <p className="text-[11px] text-muted-foreground line-clamp-2 mt-0.5">
-                          {task.description}
-                        </p>
-                      )}
-
-                      {/* Badges */}
                       {task && height >= SLOT_PX * 2.5 && (
                         <div className="flex flex-wrap gap-1.5 mt-auto pt-1">
-                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${PRIORITY_STYLES[task.priority] ?? ''}`}>
-                            {task.priority}
+                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${PRIORITY_STYLES[(task as any).priority] ?? ''}`}>
+                            {(task as any).priority}
                           </span>
-                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${STATUS_STYLES[task.status] ?? ''}`}>
-                            {task.status.replace('_', ' ')}
+                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${STATUS_STYLES[(task as any).status] ?? ''}`}>
+                            {((task as any).status ?? '').replace('_', ' ')}
                           </span>
                         </div>
                       )}
@@ -382,7 +411,7 @@ export default function DailyView({ workerId }: DailyViewProps) {
               );
             })}
 
-            {/* ── Current time indicator ── */}
+            {/* Current time indicator */}
             {nowIndicator !== null && (
               <div
                 className="absolute left-0 right-0 flex items-center pointer-events-none z-10"
@@ -398,7 +427,6 @@ export default function DailyView({ workerId }: DailyViewProps) {
           </div>
         </div>
       </div>
-
     </div>
   );
 }

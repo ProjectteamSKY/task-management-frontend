@@ -39,13 +39,51 @@ interface WorkerOverviewProps {
   scheduleKey?: number;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Returns the Monday of the week that `date` falls in. */
+function getMondayOf(date: Date): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/** Returns ISO date strings Mon–Fri starting from `monday`. */
+function weekDates(monday: Date): string[] {
+  return Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+}
+
+function formatWeekLabel(monday: Date): string {
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+  const fmt = (d: Date) =>
+    d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return `${fmt(monday)} – ${fmt(friday)}`;
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function WorkerOverview({ worker, perf, workerTasks, workload, scheduleKey }: WorkerOverviewProps) {
   const [slots,        setSlots]        = useState<ScheduleSlot[]>([]);
   const [taskMap,      setTaskMap]      = useState<Record<string, ScheduleTask>>({});
-  const [dates,        setDates]        = useState<string[]>([]);
+  const [allDates,     setAllDates]     = useState<string[]>([]);   // dates that have real data
   const [schedLoading, setSchedLoading] = useState(true);
+
+  // Week navigation — 0 = current week, -1 = last week, +1 = next week, …
+  const [weekOffset, setWeekOffset] = useState(0);
+
+  // Derived: which Mon–Fri to show
+  const currentMonday = getMondayOf(new Date());
+  currentMonday.setDate(currentMonday.getDate() + weekOffset * 7);
+  const displayDates  = weekDates(currentMonday);
+  const weekLabel     = formatWeekLabel(currentMonday);
+
+  const isCurrentWeek = weekOffset === 0;
 
   // ── Fetch schedule — re-runs when worker changes OR an assignment is added/removed
   useEffect(() => {
@@ -66,31 +104,21 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
         setTaskMap(map);
 
         const uniqueDates = [...new Set(workerSlots.map((s: ScheduleSlot) => s.date))].sort() as string[];
-        if (uniqueDates.length > 0) {
-          setDates(uniqueDates.slice(-5));
-        } else {
-          const today  = new Date();
-          const monday = new Date(today);
-          monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
-          setDates(
-            Array.from({ length: 5 }, (_, i) => {
-              const d = new Date(monday);
-              d.setDate(monday.getDate() + i);
-              return d.toISOString().slice(0, 10);
-            })
-          );
-        }
+        setAllDates(uniqueDates);
       })
       .catch(err => console.error('Failed to load schedule:', err))
       .finally(() => setSchedLoading(false));
 
-  }, [worker?.id, scheduleKey]); // ← scheduleKey triggers re-fetch after assign/unassign
+  }, [worker?.id, scheduleKey]);
 
   // ── Helpers ───────────────────────────────────────────────────────
 
   function getSlot(date: string, time: string): ScheduleSlot | undefined {
     return slots.find(s => s.date === date && s.startTime === time);
   }
+
+  // Does the displayed week have any real slot data?
+  const hasDataForWeek = displayDates.some(d => allDates.includes(d));
 
   return (
     <div className="space-y-4">
@@ -143,7 +171,46 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
 
       {/* Weekly Schedule */}
       <div className="glass rounded-xl p-5">
-        <h3 className="text-sm font-semibold text-foreground mb-4">Weekly Schedule</h3>
+
+        {/* ── Header row with navigation ── */}
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-foreground">Weekly Schedule</h3>
+
+          <div className="flex items-center gap-2">
+            {/* Prev week */}
+            <button
+              onClick={() => setWeekOffset(o => o - 1)}
+              className="w-7 h-7 flex items-center justify-center rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Previous week"
+            >
+              ‹
+            </button>
+
+            {/* Week label + "Today" jump */}
+            <span className="text-xs text-muted-foreground min-w-[130px] text-center">
+              {weekLabel}
+            </span>
+
+            {/* Next week */}
+            <button
+              onClick={() => setWeekOffset(o => o + 1)}
+              className="w-7 h-7 flex items-center justify-center rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Next week"
+            >
+              ›
+            </button>
+
+            {/* Jump to current week (hidden when already there) */}
+            {!isCurrentWeek && (
+              <button
+                onClick={() => setWeekOffset(0)}
+                className="text-[10px] px-2 py-1 rounded-lg bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+              >
+                Today
+              </button>
+            )}
+          </div>
+        </div>
 
         {schedLoading ? (
           <div className="flex items-center justify-center py-10">
@@ -166,10 +233,16 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
                   </tr>
                 </thead>
                 <tbody>
-                  {dates.map(date => (
+                  {displayDates.map(date => (
                     <tr key={date}>
                       <td className="text-xs text-foreground p-2 font-medium whitespace-nowrap">
-                        {date.slice(5)}
+                        {/* Highlight today's row label */}
+                        <span className={date === new Date().toISOString().slice(0, 10)
+                          ? 'text-primary font-bold'
+                          : ''
+                        }>
+                          {date.slice(5)}
+                        </span>
                       </td>
                       {TIME_SLOTS.map(time => {
                         const slot   = getSlot(date, time);
@@ -197,9 +270,10 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
               </table>
             </div>
 
-            {dates.length === 0 && (
-              <p className="text-sm text-muted-foreground text-center py-6">
-                No schedule data available for this worker.
+            {/* Show a hint when browsing a week with no real slot data */}
+            {!hasDataForWeek && (
+              <p className="text-xs text-muted-foreground text-center py-3">
+                No schedule data for this week.
               </p>
             )}
 

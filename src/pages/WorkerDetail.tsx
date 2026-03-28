@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ChevronRightIcon, PencilIcon, PlusIcon } from '@/components/icons/Icons';
+import { workers, workerPerformance, tasks, getOverallWorkload, workerNotes, emergencyContacts, workerEquipment, workerTrainingSessions, workerSkillGoals, workerShiftSchedules  } from '@/data/mockData';
+import { ChevronRightIcon, StarIcon, PencilIcon, PlusIcon } from '@/components/icons/Icons';
 import AddWorkerModal,      { WorkerFormData }  from '@/modal/AddWorkerModal';
 import WorkerOverview                           from '@/components/workers/WorkerOverview';
 import TaskHistory                              from '@/components/workers/TaskHistory';
@@ -9,6 +10,10 @@ import AvailabilityAndLeave                     from '@/components/workers/Avail
 import AssignTasksPanel                         from '@/components/workers/AssignTasksPanel';
 import DailyView                                from '@/components/workers/DailyView';
 import WorkerNotes                              from '@/components/workers/Workernotes';
+import EmergencyContact                         from '@/components/workers/Emergencycontact';
+import EquipmentTools                           from '@/components/workers/Equipmenttools';
+import TrainingDevelopment                      from '@/components/workers/Trainingdevelopment';
+import ShiftSchedulePlanner                     from '@/components/workers/Shiftscheduleplanner';
 import {
   workerService,
   capabilityService,
@@ -20,7 +25,7 @@ import { assignmentService } from '@/services/taskassignmentService';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'history' | 'skills' | 'availability' | 'performance' | 'daily' | 'notes';
+type Tab = 'overview' | 'history' | 'skills' | 'availability' | 'performance' | 'daily' | 'notes' | 'emergency' | 'equipment' | 'training' | 'shift';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview',     label: 'Overview'             },
@@ -30,6 +35,10 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'performance',  label: 'Performance'          },
   { key: 'daily',        label: 'Daily View'           },
   { key: 'notes',        label: 'Notes'                },
+  { key: 'emergency',    label: 'Emergency Contact'    },
+  { key: 'equipment',    label: 'Equipment & Tools'    },
+  { key: 'training',     label: 'Training & Dev'       },
+  { key: 'shift',        label: 'Shift Planner'        },
 ];
 
 interface NormalisedTask {
@@ -102,7 +111,7 @@ export default function WorkerDetail() {
 
   // ── Fetch worker + capabilities ───────────────────────────────────
   useEffect(() => {
-    if (!id) return;
+    if (!id) return;                          // ← guard: no id, no fetch
     setLoading(true);
     Promise.all([
       workerService.getWorker(Number(id)),
@@ -153,7 +162,6 @@ export default function WorkerDetail() {
       }
     }
 
-    // Signal WorkerOverview to re-fetch the schedule grid
     setScheduleKey(k => k + 1);
   }, [worker, assignments, allTasks]);
 
@@ -207,7 +215,7 @@ export default function WorkerDetail() {
     };
   }
 
-  // ── Loading / error ───────────────────────────────────────────────
+  // ── Loading ───────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -216,6 +224,7 @@ export default function WorkerDetail() {
     );
   }
 
+  // ── Error / missing worker ────────────────────────────────────────
   if (error || !worker) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
@@ -230,14 +239,16 @@ export default function WorkerDetail() {
     );
   }
 
-  // ── Derived ───────────────────────────────────────────────────────
+  // ── Everything below this line is safe: worker is guaranteed non-null ──
 
-const initialSkills = capabilities.map((c, i) => ({
-  id:          String(i),
-  name:        c.capability,   // ✅ SkillsSection reads skill.name
-  category:    'Technical',    // ✅ required by Skill type
-  proficiency: c.proficiency,
-}));
+  const workerId = Number(worker.id); // single source of truth — always a valid number
+
+  const initialSkills = capabilities.map((c, i) => ({
+    id:          String(i),
+    name:        c.capability,
+    category:    'Technical',
+    proficiency: c.proficiency,
+  }));
 
   const workerTasks = allTasks.filter(t =>
     assignments.some(a => a.taskId === t.id && a.workerId === worker.id)
@@ -316,7 +327,7 @@ const initialSkills = capabilities.map((c, i) => ({
       </div>
 
       {/* ── Tabs ── */}
-      <div className="flex items-center gap-1 border-b border-border/50 overflow-x-auto scrollbar-none">
+      <div className="flex items-center gap-1 border-b border-border/50 overflow-x-auto tab-scrollbar">
         {TABS.map(tab => (
           <button
             key={tab.key}
@@ -345,29 +356,79 @@ const initialSkills = capabilities.map((c, i) => ({
           scheduleKey={scheduleKey}
         />
       )}
-      {activeTab === 'history'      && <TaskHistory workerId={worker.id} />}
-      {activeTab === 'skills'       && (
+
+      {activeTab === 'history' && (
+        <TaskHistory workerId={worker.id} />
+      )}
+
+      {activeTab === 'skills' && (
         <SkillsAndCerts
-          workerId={Number(worker.id)}
+          workerId={workerId}
           initialSkills={initialSkills}
           initialCerts={[]}
           onCertsChange={updated => console.log('Certs updated:', updated)}
         />
       )}
+
       {activeTab === 'availability' && (
-        <AvailabilityAndLeave onChange={data => console.log('Availability:', data)} />
+        <AvailabilityAndLeave workerId={workerId} />
       )}
-      {activeTab === 'performance'  && (
+
+      {activeTab === 'performance' && (
         <div className="glass rounded-xl p-12 flex flex-col items-center justify-center text-center">
           <p className="text-sm text-muted-foreground">No performance data available.</p>
         </div>
       )}
-      {activeTab === 'daily'        && <DailyView workerId={worker.id} />}
-      {activeTab === 'notes'        && (
+
+      {activeTab === 'daily' && (
+        <DailyView workerId={worker.id} />
+      )}
+
+      {activeTab === 'notes' && (
         <WorkerNotes
           workerId={worker.id}
           initialNotes={[]}
           onChange={updated => console.log('Notes updated:', updated)}
+        />
+      )}
+
+      {/* ← KEY FIX: only mount EmergencyContact once workerId is a valid number.
+           The `key` prop ensures it remounts cleanly if the user navigates
+           between worker detail pages without a full unmount.             */}
+      {activeTab === 'emergency' && workerId && (
+        <EmergencyContact
+          key={workerId}
+          workerId={workerId}
+          initialData={emergencyContacts.find(c => c.workerId === worker.id)}
+          onChange={data => console.log('Emergency contact updated:', data)}
+        />
+      )}
+
+      {activeTab === 'equipment' && workerId && (
+        <EquipmentTools
+          key={workerId}
+          workerId={workerId}
+          initialEquipment={workerEquipment.filter(e => e.workerId === worker.id)}
+          onChange={updated => console.log('Equipment updated:', updated)}
+        />
+      )}
+
+      {activeTab === 'training' && workerId && (
+        <TrainingDevelopment
+          key={workerId}
+          workerId={workerId}
+          initialSessions={workerTrainingSessions.filter(t => t.workerId === worker.id)}
+          initialGoals={workerSkillGoals.filter(g => g.workerId === worker.id)}
+          onChange={(sessions, goals) => console.log('Training updated:', sessions, goals)}
+        />
+      )}
+
+      {activeTab === 'shift' && workerId && (
+        <ShiftSchedulePlanner
+          key={workerId}
+          workerId={workerId}
+          initialSchedule={workerShiftSchedules.find(s => s.workerId === worker.id)}
+          onChange={schedule => console.log('Shift updated:', schedule)}
         />
       )}
 
