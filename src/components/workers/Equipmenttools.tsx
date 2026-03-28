@@ -21,13 +21,13 @@ interface EquipmentToolsProps {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CATEGORIES  = ['Vehicle', 'Tool', 'Device', 'Safety Gear', 'Machinery', 'Other'];
+
 const CONDITIONS  = ['Good', 'Fair', 'Poor'] as const;
 
 const emptyEquipment: Omit<Equipment, 'id'> = {
   name:         '',
   equipmentId:  '',
-  category:     CATEGORIES[0],
+  category:     '',  
   assignedDate: '',
   returnDate:   '',
   condition:    'Good',
@@ -89,7 +89,6 @@ function EquipmentForm({
   function handleSave() {
     const next: typeof errors = {};
     if (!form.name.trim())        next.name        = 'Equipment name is required';
-    if (!form.equipmentId.trim()) next.equipmentId = 'Equipment ID is required';
     if (!form.assignedDate)       next.assignedDate = 'Assigned date is required';
     setErrors(next);
     if (Object.keys(next).length) return;
@@ -122,16 +121,15 @@ function EquipmentForm({
         </div>
 
         {/* Category */}
-        <div>
-          <label className="text-xs text-muted-foreground mb-1.5 block">Category</label>
-          <select
-            value={form.category}
-            onChange={e => setField('category', e.target.value)}
-            className={selectCls}
-          >
-            {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
+
+<div>
+  <label className="text-xs text-muted-foreground mb-1.5 block">Category</label>
+  <Input
+    placeholder="e.g. Vehicle, Tool, Machinery…"
+    value={form.category}
+    onChange={e => setField('category', e.target.value)}
+  />
+</div>
 
         {/* Condition */}
         <div>

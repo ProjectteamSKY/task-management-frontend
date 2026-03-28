@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Input } from '@/components/ui/input';
-import { PencilIcon, CheckIcon } from '@/components/icons/Icons';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { PencilIcon, CheckIcon, XIcon } from '@/components/icons/Icons';
+import { workerService } from '@/services/workerService';
 
 export interface EmergencyContactData {
   fullName:     string;
@@ -13,11 +12,8 @@ export interface EmergencyContactData {
 }
 
 interface EmergencyContactProps {
-  initialData?: EmergencyContactData;
-  onChange?:    (data: EmergencyContactData) => void;
+  workerId: number;
 }
-
-// ─── Constants ────────────────────────────────────────────────────────────────
 
 const RELATIONSHIPS = ['Spouse', 'Parent', 'Sibling', 'Child', 'Friend', 'Other'];
 
@@ -33,32 +29,47 @@ const selectCls =
   'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ' +
   'ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2';
 
-// ─── Field Row (read-only display) ────────────────────────────────────────────
-
 function FieldRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-1">
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</p>
-      <p className="text-sm text-foreground">{value || <span className="text-muted-foreground italic">Not provided</span>}</p>
+      <p className="text-sm text-foreground">
+        {value || <span className="text-muted-foreground italic">Not provided</span>}
+      </p>
     </div>
   );
 }
 
-// ─── Main: EmergencyContact ───────────────────────────────────────────────────
-
-export default function EmergencyContact({ initialData, onChange }: EmergencyContactProps) {
-  const [data,    setData]    = useState<EmergencyContactData>(initialData ?? emptyContact);
-  const [editing, setEditing] = useState(!initialData);   // open form if no data yet
-  const [form,    setForm]    = useState<EmergencyContactData>(data);
-  const [errors,  setErrors]  = useState<Partial<Record<keyof EmergencyContactData, string>>>({});
+export default function EmergencyContact({ workerId }: EmergencyContactProps) {
+  const [data,       setData]       = useState<EmergencyContactData>(emptyContact);
+  const [editing,    setEditing]    = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [form,       setForm]       = useState<EmergencyContactData>(emptyContact);
+  const [errors,     setErrors]     = useState<Partial<Record<keyof EmergencyContactData, string>>>({});
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
 
   useEffect(() => {
-    if (initialData) {
-      setData(initialData);
-      setForm(initialData);
-      setEditing(false);
-    }
-  }, [initialData]);
+    workerService.getEmergencyContact(workerId)
+      .then(contact => {
+        // contact is null when none exists (404 or null body with 200)
+        if (contact && contact.fullName) {
+          const mapped: EmergencyContactData = {
+            fullName:     contact.fullName,
+            relationship: contact.relationship || RELATIONSHIPS[0],
+            phone:        contact.phone,
+            email:        contact.email,
+            address:      contact.address,
+          };
+          setData(mapped);
+          setForm(mapped);
+        } else {
+          setEditing(true);
+        }
+      })
+      .catch(() => setError('Failed to load emergency contact'))
+      .finally(() => setLoading(false));
+  }, [workerId]);
 
   function setField<K extends keyof EmergencyContactData>(key: K, value: string) {
     setForm(prev => ({ ...prev, [key]: value }));
@@ -73,11 +84,22 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
     return Object.keys(next).length === 0;
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!validate()) return;
-    setData(form);
-    onChange?.(form);
-    setEditing(false);
+    try {
+      await workerService.upsertEmergencyContact(workerId, {
+        full_name:    form.fullName,
+        relationship: form.relationship,
+        phone:        form.phone,
+        email:        form.email    || undefined,
+        address:      form.address  || undefined,
+      });
+      setData(form);
+      setEditing(false);
+      setError('');
+    } catch {
+      setError('Failed to save emergency contact');
+    }
   }
 
   function handleCancel() {
@@ -86,12 +108,25 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
     setEditing(false);
   }
 
-  const hasData = data.fullName.trim() !== '';
+  async function handleDelete() {
+    try {
+      await workerService.deleteEmergencyContact(workerId);
+      setData(emptyContact);
+      setForm(emptyContact);
+      setConfirming(false);
+      setEditing(true);
+      setError('');
+    } catch {
+      setError('Failed to delete emergency contact');
+    }
+  }
 
-  // ── Initials avatar ──
+  const hasData  = data.fullName.trim() !== '';
   const initials = data.fullName
     .split(' ').filter(Boolean).slice(0, 2)
     .map(n => n[0].toUpperCase()).join('');
+
+  if (loading) return <p className="text-xs text-muted-foreground p-5">Loading…</p>;
 
   return (
     <div className="glass rounded-xl p-5">
@@ -104,22 +139,52 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
             Person to contact in case of emergency
           </p>
         </div>
-        {!editing && hasData && (
-          <button
-            onClick={() => setEditing(true)}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/70 transition-colors"
-          >
-            <PencilIcon size={13} />
-            Edit
-          </button>
+        {!editing && hasData && !confirming && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setEditing(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/70 transition-colors"
+            >
+              <PencilIcon size={13} />
+              Edit
+            </button>
+            <button
+              onClick={() => setConfirming(true)}
+              className="w-7 h-7 rounded-lg flex items-center justify-center bg-secondary hover:bg-destructive/15 transition-colors"
+              title="Delete contact"
+            >
+              <XIcon size={13} className="text-muted-foreground" />
+            </button>
+          </div>
         )}
       </div>
+
+      {error && <p className="text-xs text-destructive mb-3">{error}</p>}
+
+      {/* Delete confirmation */}
+      {confirming && (
+        <div className="bg-destructive/10 border border-destructive/30 rounded-xl px-4 py-3 flex items-center gap-3 mb-4">
+          <p className="text-xs text-foreground flex-1">Delete this emergency contact?</p>
+          <button
+            onClick={handleDelete}
+            className="text-xs px-2.5 py-1 rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity"
+          >
+            Delete
+          </button>
+          <button
+            onClick={() => setConfirming(false)}
+            className="text-xs px-2.5 py-1 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/70 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {/* Edit form */}
       {editing ? (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            {/* Full name */}
+
             <div>
               <label className="text-xs text-muted-foreground mb-1.5 block">Full name</label>
               <Input
@@ -130,7 +195,6 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
               {errors.fullName && <p className="text-[11px] text-destructive mt-1">{errors.fullName}</p>}
             </div>
 
-            {/* Relationship */}
             <div>
               <label className="text-xs text-muted-foreground mb-1.5 block">Relationship</label>
               <select
@@ -142,7 +206,6 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
               </select>
             </div>
 
-            {/* Phone */}
             <div>
               <label className="text-xs text-muted-foreground mb-1.5 block">Phone number</label>
               <Input
@@ -153,7 +216,6 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
               {errors.phone && <p className="text-[11px] text-destructive mt-1">{errors.phone}</p>}
             </div>
 
-            {/* Email */}
             <div>
               <label className="text-xs text-muted-foreground mb-1.5 block">Email</label>
               <Input
@@ -165,7 +227,6 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
             </div>
           </div>
 
-          {/* Address */}
           <div>
             <label className="text-xs text-muted-foreground mb-1.5 block">Address</label>
             <Input
@@ -175,7 +236,6 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
             />
           </div>
 
-          {/* Actions */}
           <div className="flex justify-end gap-2 pt-1">
             {hasData && (
               <button
@@ -196,10 +256,8 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
           </div>
         </div>
 
-      ) : hasData ? (
-        /* Read-only view */
+      ) : hasData && !confirming ? (
         <div className="space-y-5">
-          {/* Contact card */}
           <div className="flex items-center gap-4 p-4 bg-secondary/40 rounded-xl border border-border/40">
             <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center text-sm font-bold text-primary-foreground shrink-0">
               {initials || '?'}
@@ -212,7 +270,6 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
             </div>
           </div>
 
-          {/* Fields grid */}
           <div className="grid grid-cols-2 gap-x-6 gap-y-4">
             <FieldRow label="Phone"   value={data.phone}   />
             <FieldRow label="Email"   value={data.email}   />
@@ -220,8 +277,7 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
           </div>
         </div>
 
-      ) : (
-        /* Empty state */
+      ) : !confirming ? (
         <div className="flex flex-col items-center justify-center py-14 text-center">
           <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-3">
             <CheckIcon size={16} className="text-muted-foreground" />
@@ -234,7 +290,7 @@ export default function EmergencyContact({ initialData, onChange }: EmergencyCon
             Add emergency contact
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

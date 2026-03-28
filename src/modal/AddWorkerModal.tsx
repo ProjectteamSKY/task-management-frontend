@@ -21,7 +21,6 @@ interface AddWorkerModalProps {
   initialData?: WorkerFormData;
 }
 
-const DEPARTMENTS = ['Construction', 'Engineering', 'QA', 'Field Service', 'Management'];
 
 const STATUS_OPTIONS: { value: WorkerFormData['status']; label: string }[] = [
   { value: 'active',   label: 'Active'   },
@@ -32,13 +31,12 @@ const STATUS_OPTIONS: { value: WorkerFormData['status']; label: string }[] = [
 const emptyForm: WorkerFormData = {
   name:         '',
   role:         '',
-  department:   DEPARTMENTS[0],
+  department:   '',   // ← was DEPARTMENTS[0]
   email:        '',
   status:       'active',
   dailyCap:     '8',
   capabilities: [{ name: '', proficiency: 3 }],
 };
-
 export default function AddWorkerModal({ open, onClose, onSubmit, initialData }: AddWorkerModalProps) {
   const isEditMode = Boolean(initialData);
 
@@ -159,13 +157,11 @@ export default function AddWorkerModal({ open, onClose, onSubmit, initialData }:
                     </div>
                     <div>
                       <label className="text-xs text-muted-foreground mb-1.5 block">Department</label>
-                      <select
-                        value={form.department}
-                        onChange={e => setField('department', e.target.value)}
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                      >
-                        {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
-                      </select>
+                     <Input
+  placeholder="e.g. Engineering"
+  value={form.department}
+  onChange={e => setField('department', e.target.value)}
+/>
                     </div>
                   </div>
 
