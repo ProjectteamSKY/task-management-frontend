@@ -7,7 +7,7 @@ import WorkerOverview                           from '@/components/workers/Worke
 import TaskHistory                              from '@/components/workers/TaskHistory';
 import SkillsAndCerts                           from '@/components/workers/SkillsAndCerts';
 import AvailabilityAndLeave                     from '@/components/workers/AvailabilityAndLeave';
-import AssignTasksPanel                         from '@/components/workers/AssignTasksPanel';
+import AssignTasksPanel, { type AssignSchedulePayload } from '@/components/workers/AssignTasksPanel';
 import DailyView                                from '@/components/workers/DailyView';
 import WorkerNotes                              from '@/components/workers/Workernotes';
 import EmergencyContact                         from '@/components/workers/Emergencycontact';
@@ -20,6 +20,7 @@ import {
   type NormalisedWorker,
   type NormalisedCapability,
 } from '@/services/workerService';
+import { createScheduleSlot } from '@/services/scheduleService';
 import { taskService }       from '@/services/taskService';
 import { assignmentService } from '@/services/taskassignmentService';
 
@@ -59,6 +60,11 @@ interface NormalisedAssignment {
   allocatedHours: number;
   assignedDate:   string;
   status:         string;
+  // Schedule fields (new)
+  date?:          string;   // 'YYYY-MM-DD'  ← start_date from API
+  startTime?:     string;   // 'HH:MM'       ← start_time from API
+  endTime?:       string;   // 'HH:MM'       ← end_time from API
+  durationUnits?: number;   //               ← duration_units from API
 }
 
 // ─── Normalisers ──────────────────────────────────────────────────────────────
@@ -84,6 +90,11 @@ function normaliseAssignment(a: any): NormalisedAssignment {
     allocatedHours: a.allocated_hours ?? 0,
     assignedDate:   a.assigned_date   ?? '',
     status:         a.status          ?? 'active',
+    // Map snake_case schedule fields → camelCase
+    date:           a.start_date   ?? undefined,
+    startTime:      a.start_time   ? String(a.start_time).slice(0, 5) : undefined,
+    endTime:        a.end_time     ? String(a.end_time).slice(0, 5)   : undefined,
+    durationUnits:  a.duration_units ?? undefined,
   };
 }
 
@@ -111,7 +122,7 @@ export default function WorkerDetail() {
 
   // ── Fetch worker + capabilities ───────────────────────────────────
   useEffect(() => {
-    if (!id) return;                          // ← guard: no id, no fetch
+    if (!id) return;
     setLoading(true);
     Promise.all([
       workerService.getWorker(Number(id)),
@@ -139,20 +150,40 @@ export default function WorkerDetail() {
       .catch(err => console.error('Failed to load tasks/assignments:', err));
   }, []);
 
-  // ── Assign / unassign a task ──────────────────────────────────────
-  const handleAssign = useCallback(async (taskId: string, assign: boolean): Promise<void> => {
+  // ── Assign / unassign a task — now receives schedule payload ──────
+  const handleAssign = useCallback(async (
+    taskId: string,
+    assign: boolean,
+    schedule?: AssignSchedulePayload,
+  ): Promise<void> => {
     if (!worker) return;
 
-    if (assign) {
-      const created = await assignmentService.createAssignment({
-        task_id:         Number(taskId),
-        worker_id:       Number(worker.id),
-        allocated_hours: allTasks.find(t => t.id === taskId)?.estimatedHours ?? 1,
-        assigned_date:   new Date().toISOString().slice(0, 10),
-        status:          'active',
-      });
-      setAssignments(prev => [...prev, normaliseAssignment(created)]);
-    } else {
+if (assign && schedule) {
+  const created = await assignmentService.createAssignment({
+    task_id:         Number(taskId),
+    worker_id:       Number(worker.id),
+    allocated_hours: Math.round(schedule.durationUnits / 2),
+    status:          'active',
+    start_date:      schedule.date,
+    end_date:        schedule.date,
+    start_time:      schedule.startTime,
+    end_time:        schedule.endTime,
+    duration_units:  schedule.durationUnits,
+  });
+
+  // Also insert a schedule slot row
+  await createScheduleSlot({
+    worker_id:      Number(worker.id),
+    task_id:        Number(taskId),
+    date:           schedule.date,
+    start_time:     schedule.startTime,
+    end_time:       schedule.endTime,
+    duration_units: schedule.durationUnits,
+    status:         'allocated',
+  });
+
+  setAssignments(prev => [...prev, normaliseAssignment(created)]);
+} else if (!assign) {
       const existing = assignments.find(
         a => a.taskId === taskId && a.workerId === worker.id,
       );
@@ -163,7 +194,7 @@ export default function WorkerDetail() {
     }
 
     setScheduleKey(k => k + 1);
-  }, [worker, assignments, allTasks]);
+  }, [worker, assignments]);
 
   // ── Edit worker submit ────────────────────────────────────────────
   async function handleEditSubmit(data: WorkerFormData) {
@@ -239,9 +270,7 @@ export default function WorkerDetail() {
     );
   }
 
-  // ── Everything below this line is safe: worker is guaranteed non-null ──
-
-  const workerId = Number(worker.id); // single source of truth — always a valid number
+  const workerId = Number(worker.id);
 
   const initialSkills = capabilities.map((c, i) => ({
     id:          String(i),
@@ -251,7 +280,7 @@ export default function WorkerDetail() {
   }));
 
   const workerTasks = allTasks.filter(t =>
-    assignments.some(a => a.taskId === t.id && a.workerId === worker.id)
+    assignments.some(a => a.taskId === t.id && a.workerId === worker.id),
   );
 
   return (
@@ -283,7 +312,6 @@ export default function WorkerDetail() {
             {worker.role} · {worker.department} · {worker.email}
           </p>
 
-          {/* Capabilities chips */}
           <div className="flex flex-wrap gap-2 mt-3">
             {capabilities.map(c => (
               <div key={c.id} className="flex items-center gap-1.5 text-xs bg-secondary rounded-md px-2.5 py-1.5">
@@ -298,7 +326,6 @@ export default function WorkerDetail() {
           </div>
         </div>
 
-        {/* Stats + action buttons */}
         <div className="flex flex-col items-end gap-3 shrink-0">
           <div className="flex items-center gap-2">
             <button
@@ -356,12 +383,8 @@ export default function WorkerDetail() {
           scheduleKey={scheduleKey}
         />
       )}
-
-      {activeTab === 'history' && (
-        <TaskHistory workerId={worker.id} />
-      )}
-
-      {activeTab === 'skills' && (
+      {activeTab === 'history'      && <TaskHistory workerId={worker.id} />}
+      {activeTab === 'skills'       && (
         <SkillsAndCerts
           workerId={workerId}
           initialSkills={initialSkills}
@@ -369,32 +392,20 @@ export default function WorkerDetail() {
           onCertsChange={updated => console.log('Certs updated:', updated)}
         />
       )}
-
-      {activeTab === 'availability' && (
-        <AvailabilityAndLeave workerId={workerId} />
-      )}
-
-      {activeTab === 'performance' && (
+      {activeTab === 'availability' && <AvailabilityAndLeave workerId={workerId} />}
+      {activeTab === 'performance'  && (
         <div className="glass rounded-xl p-12 flex flex-col items-center justify-center text-center">
           <p className="text-sm text-muted-foreground">No performance data available.</p>
         </div>
       )}
-
-      {activeTab === 'daily' && (
-        <DailyView workerId={worker.id} />
-      )}
-
-      {activeTab === 'notes' && (
+      {activeTab === 'daily'        && <DailyView workerId={worker.id} />}
+      {activeTab === 'notes'        && (
         <WorkerNotes
           workerId={worker.id}
           initialNotes={[]}
           onChange={updated => console.log('Notes updated:', updated)}
         />
       )}
-
-      {/* ← KEY FIX: only mount EmergencyContact once workerId is a valid number.
-           The `key` prop ensures it remounts cleanly if the user navigates
-           between worker detail pages without a full unmount.             */}
       {activeTab === 'emergency' && workerId && (
         <EmergencyContact
           key={workerId}
@@ -403,7 +414,6 @@ export default function WorkerDetail() {
           onChange={data => console.log('Emergency contact updated:', data)}
         />
       )}
-
       {activeTab === 'equipment' && workerId && (
         <EquipmentTools
           key={workerId}
@@ -412,7 +422,6 @@ export default function WorkerDetail() {
           onChange={updated => console.log('Equipment updated:', updated)}
         />
       )}
-
       {activeTab === 'training' && workerId && (
         <TrainingDevelopment
           key={workerId}
@@ -422,7 +431,6 @@ export default function WorkerDetail() {
           onChange={(sessions, goals) => console.log('Training updated:', sessions, goals)}
         />
       )}
-
       {activeTab === 'shift' && workerId && (
         <ShiftSchedulePlanner
           key={workerId}
