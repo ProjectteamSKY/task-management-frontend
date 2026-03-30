@@ -77,37 +77,41 @@ export const taskService = {
 
 
 // ------- skiode service -------
+import axios from "axios";
+
 const SKIODE_BASE_URL = `${import.meta.env.VITE_SKIODE_BASE_URL}/api/calendar/events`;
 
-const ORGANIZATION_ID = 1;
-const CREATED_BY_ID = 5;
-const PROCESS_ID = 1;
-const CASE_ID = 100;
 
-export interface CalendarEventCreatePayload {
-  title: string;
-  description: string;
-  start_datetime: string;
-  end_datetime: string;
-  timezone: string;
-  status: string;
-}
+export const createCalendarEvent = async (eventData) => {
+  try {
+    const payload = {
+      organization_id: 1,       // hardcoded
+      created_by_id: 5,         // hardcoded
+      process_id: 1,            // hardcoded
+      case_id: 100,             // hardcoded
 
-export const calendarEventService = {
-  async createEvent(data: CalendarEventCreatePayload) {
-    const body = {
-      organization_id: ORGANIZATION_ID,
-      created_by_id: CREATED_BY_ID,
-      process_id: PROCESS_ID,
-      case_id: CASE_ID,
-      ...data,
+      title: eventData.title,
+      description: eventData.description,
+      start_datetime: eventData.start_datetime,
+      end_datetime: eventData.end_datetime,
+      timezone: "Asia/Kolkata",
+      status: "SCHEDULED"
     };
-    const res = await fetch(`${SKIODE_BASE_URL}/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`Failed to create calendar event: ${res.status}`);
-    return res.json();
-  },
+
+    const response = await axios.post(
+      `${SKIODE_BASE_URL}/api/calendar/events/`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return response.data;
+
+  } catch (error) {
+    console.error("Error creating calendar event:", error.response?.data || error.message);
+    throw error;
+  }
 };

@@ -37,8 +37,9 @@ export default function Tasks() {
     try {
       const data = await taskService.getTasks();
       setTasks(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load tasks');
+    } catch (err: unknown) {
+      const error = err as Error;
+      setError(error.message || 'Failed to load tasks');
     } finally {
       setLoading(false);
     }
@@ -67,7 +68,7 @@ export default function Tasks() {
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-medium px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors"
         >
-          <span className="text-lg leading-none">+</span>
+          <span className="text-lg leading-none">+--</span>
           Create Task
         </button>
       </div>
@@ -167,7 +168,7 @@ export default function Tasks() {
                       {task.priority}
                     </span>
                   </td>
-                  <td className="p-4">
+                  {/* <td className="p-4">
                     <span className="text-[11px] bg-secondary text-muted-foreground px-2 py-0.5 rounded">
                       {task.task_type?.replace('_', ' ') ?? '—'}
                     </span>
@@ -179,7 +180,7 @@ export default function Tasks() {
                     </div>
                   </td>
                   <td className="p-4 text-sm text-muted-foreground">{task.start_date ?? '—'}</td>
-                  <td className="p-4 text-sm text-muted-foreground">{task.end_date ?? '—'}</td>
+                  <td className="p-4 text-sm text-muted-foreground">{task.end_date ?? '—'}</td> */}
                 </tr>
               ))}
 
