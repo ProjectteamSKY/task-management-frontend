@@ -41,7 +41,6 @@ interface WorkerOverviewProps {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Returns the Monday of the week that `date` falls in. */
 function getMondayOf(date: Date): Date {
   const d = new Date(date);
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
@@ -49,7 +48,6 @@ function getMondayOf(date: Date): Date {
   return d;
 }
 
-/** Returns ISO date strings Mon–Fri starting from `monday`. */
 function weekDates(monday: Date): string[] {
   return Array.from({ length: 5 }, (_, i) => {
     const d = new Date(monday);
@@ -66,26 +64,53 @@ function formatWeekLabel(monday: Date): string {
   return `${fmt(monday)} – ${fmt(friday)}`;
 }
 
+/**
+ * For a given hour column (e.g. "09:00"), returns how many 30-min sub-slots
+ * within that hour are occupied: 0 = free, 1 = half (30 min), 2 = full (60 min).
+ */
+function getSlotUnits(slots: ScheduleSlot[], workerId: string, date: string, time: string): number {
+  const subSlotMap = new Set<string>();
+
+  for (const slot of slots) {
+    if (String(slot.workerId) !== String(workerId) || slot.date !== date) continue;
+    if (slot.status === 'leave' || slot.status === 'blocked') continue;
+
+    const [h, m] = slot.startTime.replace(':00:00', '').split(':').map(Number);
+    const startMin = h * 60 + (m || 0);
+    const units    = slot.durationUnits ?? 2;
+
+    for (let u = 0; u < units; u++) {
+      const min = startMin + u * 30;
+      const hh  = String(Math.floor(min / 60)).padStart(2, '0');
+      const mm  = String(min % 60).padStart(2, '0');
+      subSlotMap.add(`${hh}:${mm}`);
+    }
+  }
+
+  const [colH] = time.split(':').map(Number);
+  const hh     = String(colH).padStart(2, '0');
+  const first  = subSlotMap.has(`${hh}:00`);
+  const second = subSlotMap.has(`${hh}:30`);
+  return (first ? 1 : 0) + (second ? 1 : 0);
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function WorkerOverview({ worker, perf, workerTasks, workload, scheduleKey }: WorkerOverviewProps) {
   const [slots,        setSlots]        = useState<ScheduleSlot[]>([]);
   const [taskMap,      setTaskMap]      = useState<Record<string, ScheduleTask>>({});
-  const [allDates,     setAllDates]     = useState<string[]>([]);   // dates that have real data
+  const [allDates,     setAllDates]     = useState<string[]>([]);
   const [schedLoading, setSchedLoading] = useState(true);
 
-  // Week navigation — 0 = current week, -1 = last week, +1 = next week, …
   const [weekOffset, setWeekOffset] = useState(0);
 
-  // Derived: which Mon–Fri to show
   const currentMonday = getMondayOf(new Date());
   currentMonday.setDate(currentMonday.getDate() + weekOffset * 7);
   const displayDates  = weekDates(currentMonday);
   const weekLabel     = formatWeekLabel(currentMonday);
-
   const isCurrentWeek = weekOffset === 0;
+  const today         = new Date().toISOString().slice(0, 10);
 
-  // ── Fetch schedule — re-runs when worker changes OR an assignment is added/removed
   useEffect(() => {
     if (!worker?.id) return;
     setSchedLoading(true);
@@ -108,23 +133,14 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
       })
       .catch(err => console.error('Failed to load schedule:', err))
       .finally(() => setSchedLoading(false));
-
   }, [worker?.id, scheduleKey]);
 
-  // ── Helpers ───────────────────────────────────────────────────────
-
-  function getSlot(date: string, time: string): ScheduleSlot | undefined {
-    return slots.find(s => s.date === date && s.startTime === time);
-  }
-
-  // Does the displayed week have any real slot data?
   const hasDataForWeek = displayDates.some(d => allDates.includes(d));
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-        {/* Performance — only shown when perf data exists */}
         {perf && (
           <div className="glass rounded-xl p-5">
             <h3 className="text-sm font-semibold text-foreground mb-4">Performance</h3>
@@ -144,7 +160,6 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
           </div>
         )}
 
-        {/* Assigned tasks */}
         <div className="glass rounded-xl p-5">
           <h3 className="text-sm font-semibold text-foreground mb-4">
             Assigned Tasks ({workerTasks.length})
@@ -172,12 +187,10 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
       {/* Weekly Schedule */}
       <div className="glass rounded-xl p-5">
 
-        {/* ── Header row with navigation ── */}
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-foreground">Weekly Schedule</h3>
 
           <div className="flex items-center gap-2">
-            {/* Prev week */}
             <button
               onClick={() => setWeekOffset(o => o - 1)}
               className="w-7 h-7 flex items-center justify-center rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
@@ -186,12 +199,10 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
               ‹
             </button>
 
-            {/* Week label + "Today" jump */}
             <span className="text-xs text-muted-foreground min-w-[130px] text-center">
               {weekLabel}
             </span>
 
-            {/* Next week */}
             <button
               onClick={() => setWeekOffset(o => o + 1)}
               className="w-7 h-7 flex items-center justify-center rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
@@ -200,7 +211,6 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
               ›
             </button>
 
-            {/* Jump to current week (hidden when already there) */}
             {!isCurrentWeek && (
               <button
                 onClick={() => setWeekOffset(0)}
@@ -233,44 +243,58 @@ export default function WorkerOverview({ worker, perf, workerTasks, workload, sc
                   </tr>
                 </thead>
                 <tbody>
-                  {displayDates.map(date => (
-                    <tr key={date}>
-                      <td className="text-xs text-foreground p-2 font-medium whitespace-nowrap">
-                        {/* Highlight today's row label */}
-                        <span className={date === new Date().toISOString().slice(0, 10)
-                          ? 'text-primary font-bold'
-                          : ''
-                        }>
-                          {date.slice(5)}
-                        </span>
-                      </td>
-                      {TIME_SLOTS.map(time => {
-                        const slot   = getSlot(date, time);
-                        const status = slot?.status ?? 'available';
-                        const task   = slot?.taskId ? taskMap[slot.taskId] : null;
-                        return (
-                          <td key={time} className="p-1">
-                            <div
-                              title={task ? task.title : status}
-                              className={`h-8 rounded-md flex items-center justify-center text-[9px] font-medium cursor-default transition-colors ${
-                                status === 'allocated' ? 'slot-allocated' :
-                                status === 'leave'     ? 'slot-leave'     :
-                                status === 'blocked'   ? 'slot-blocked'   :
-                                                         'slot-available'
-                              }`}
-                            >
-                              {status === 'allocated' ? '█' : status === 'leave' ? 'L' : '░'}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                  {displayDates.map(date => {
+                    const isLeave = slots.some(
+                      s => String(s.workerId) === String(worker.id) &&
+                           s.date === date && s.status === 'leave',
+                    );
+                    const isBlocked = !isLeave && slots.some(
+                      s => String(s.workerId) === String(worker.id) &&
+                           s.date === date && s.status === 'blocked',
+                    );
+
+                    return (
+                      <tr key={date}>
+                        <td className="text-xs text-foreground p-2 font-medium whitespace-nowrap">
+                          <span className={date === today ? 'text-primary font-bold' : ''}>
+                            {date.slice(5)}
+                          </span>
+                        </td>
+                        {TIME_SLOTS.map(time => {
+                          const units = getSlotUnits(slots, worker.id, date, time);
+
+                          return (
+                            <td key={time} className="p-1">
+                              <div className="h-8 rounded-md overflow-hidden">
+                                {isLeave ? (
+                                  <div className="w-full h-full slot-leave flex items-center justify-center text-[9px] font-medium">L</div>
+                                ) : isBlocked ? (
+                                  <div className="w-full h-full slot-blocked flex items-center justify-center text-[9px] font-medium">░</div>
+                                ) : units === 2 ? (
+                                  // Full hour allocated
+                                  <div className="w-full h-full slot-allocated flex items-center justify-center text-[9px] font-medium">█</div>
+                               ) : units === 1 ? (
+  // Half hour allocated — left half filled, right half free
+  <div className="w-full h-full flex flex-row">
+    <div className="h-full flex-1 slot-allocated" />
+    <div className="h-full flex-1 slot-available" />
+  </div>
+
+                                ) : (
+                                  // Free
+                                  <div className="w-full h-full slot-available flex items-center justify-center text-[9px] font-medium">░</div>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
-            {/* Show a hint when browsing a week with no real slot data */}
             {!hasDataForWeek && (
               <p className="text-xs text-muted-foreground text-center py-3">
                 No schedule data for this week.

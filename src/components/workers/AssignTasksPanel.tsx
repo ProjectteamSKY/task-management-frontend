@@ -2,8 +2,6 @@ import { useState, useMemo, useEffect } from 'react';
 import { SearchIcon, XIcon, CheckIcon, ClockIcon, AlertIcon } from '@/components/icons/Icons';
 import type { NormalisedAssignment } from '@/pages/MembersTask';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 interface NormalisedTask {
   id:             string;
   title:          string;
@@ -15,16 +13,27 @@ interface NormalisedTask {
   dueDate:        string;
 }
 
+export interface AssignSchedulePayload {
+  date:          string;
+  startTime:     string;
+  endTime:       string;
+  durationUnits: number;
+}
+
 interface AssignTasksPanelProps {
   open:        boolean;
   worker:      { id: string; name: string; dailyCapacityHours: number };
-  assignments: NormalisedAssignment[];   // all assignments from parent
-  allTasks:    NormalisedTask[];         // all tasks from parent
+  assignments: NormalisedAssignment[];
+  allTasks:    NormalisedTask[];
   onClose:     () => void;
-  onAssign:    (taskId: string, assigned: boolean) => Promise<void>;
+  onAssign:    (taskId: string, assigned: boolean, schedule?: AssignSchedulePayload) => Promise<void>;
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+const TIME_SLOTS: string[] = [];
+for (let h = 6; h <= 22; h++) {
+  TIME_SLOTS.push(`${String(h).padStart(2, '0')}:00`);
+  if (h < 22) TIME_SLOTS.push(`${String(h).padStart(2, '0')}:30`);
+}
 
 const PRIORITY_STYLES: Record<string, string> = {
   critical: 'bg-destructive/15 text-destructive',
@@ -42,11 +51,172 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 const inputCls =
-  'flex h-9 rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground ' +
+  'flex h-8 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground ' +
   'ring-offset-background focus-visible:outline-none focus-visible:ring-2 ' +
   'focus-visible:ring-ring focus-visible:ring-offset-2';
 
-// ─── Component ────────────────────────────────────────────────────────────────
+function toMinutes(t: string) {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function calcDurationUnits(start: string, end: string): number {
+  return Math.max(0, Math.round((toMinutes(end) - toMinutes(start)) / 30));
+}
+
+function formatDuration(units: number): string {
+  if (units <= 0) return '—';
+  const totalMins = units * 30;
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  if (h === 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function SchedulePickerModal({
+  task,
+  onConfirm,
+  onCancel,
+}: {
+  task:      NormalisedTask;
+  onConfirm: (payload: AssignSchedulePayload) => void;
+  onCancel:  () => void;
+}) {
+  const today = new Date().toISOString().split('T')[0];
+
+  const [date,      setDate]      = useState(task.startDate || today);
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime,   setEndTime]   = useState('10:00');
+  const [error,     setError]     = useState('');
+
+  const durationUnits = calcDurationUnits(startTime, endTime);
+  const durationLabel = formatDuration(durationUnits);
+
+  function handleStartChange(val: string) {
+    setStartTime(val);
+    setError('');
+    if (toMinutes(endTime) <= toMinutes(val)) {
+      const idx  = TIME_SLOTS.indexOf(val);
+      const next = TIME_SLOTS[idx + 1] ?? val;
+      setEndTime(next);
+    }
+  }
+
+  function handleConfirm() {
+    if (!date)              { setError('Please select a date.');             return; }
+    if (durationUnits <= 0) { setError('End time must be after start time.'); return; }
+    const payload: AssignSchedulePayload = { date, startTime, endTime, durationUnits };
+    console.log('📅 SchedulePickerModal confirmed payload:', payload);
+    onConfirm(payload);
+  }
+
+  const endTimeOptions = TIME_SLOTS.filter(t => toMinutes(t) > toMinutes(startTime));
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="w-[calc(100%-48px)] max-w-[300px] bg-background border border-border rounded-xl shadow-2xl p-3.5">
+
+        <h3 className="text-[13px] font-semibold text-foreground mb-0.5">Schedule slot</h3>
+        <p className="text-[11px] text-muted-foreground mb-2.5 truncate" title={task.title}>
+          {task.title}
+        </p>
+
+        {task.estimatedHours > 0 && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground bg-secondary rounded-md px-2.5 py-1.5 mb-2.5">
+            <ClockIcon size={11} />
+            Estimated: <span className="font-medium text-foreground">{task.estimatedHours}h</span>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <div>
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+              Date <span className="text-destructive">*</span>
+            </label>
+            <input
+              type="date"
+              value={date}
+              min={today}
+              onChange={e => { setDate(e.target.value); setError(''); }}
+              className={inputCls + ' w-full'}
+            />
+            {(task.startDate || task.dueDate) && (
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Task window: {task.startDate || '—'} → {task.dueDate || '—'}
+              </p>
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                Start <span className="text-destructive">*</span>
+              </label>
+              <select
+                value={startTime}
+                onChange={e => handleStartChange(e.target.value)}
+                className={inputCls + ' w-full'}
+              >
+                {TIME_SLOTS.filter((_, i) => i < TIME_SLOTS.length - 1).map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex-1">
+              <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                End <span className="text-destructive">*</span>
+              </label>
+              <select
+                value={endTime}
+                onChange={e => { setEndTime(e.target.value); setError(''); }}
+                className={inputCls + ' w-full'}
+              >
+                {endTimeOptions.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className={`flex items-center justify-between text-[11px] rounded-md px-2.5 py-1.5 ${
+            durationUnits > 0 ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'
+          }`}>
+            <span>Duration</span>
+            <span className="font-semibold">{durationLabel} · {durationUnits} unit{durationUnits !== 1 ? 's' : ''}</span>
+          </div>
+
+          {task.estimatedHours > 0 && durationUnits / 2 > task.estimatedHours && (
+            <div className="flex items-center gap-1.5 text-[11px] text-warning bg-warning/10 rounded-md px-2.5 py-1.5">
+              <AlertIcon size={11} />
+              Slot exceeds estimated {task.estimatedHours}h
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <p className="text-[11px] text-destructive mt-2 flex items-center gap-1">
+            <AlertIcon size={11} /> {error}
+          </p>
+        )}
+
+        <div className="flex gap-2 mt-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 h-8 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            className="flex-1 h-8 rounded-lg gradient-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity"
+          >
+            Assign &amp; Schedule
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function AssignTasksPanel({
   open,
@@ -59,27 +229,26 @@ export default function AssignTasksPanel({
   const [search,         setSearch]         = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [statusFilter,   setStatusFilter]   = useState('all');
-  const [pending,        setPending]        = useState<Set<string>>(new Set()); // task IDs awaiting API
+  const [pending,        setPending]        = useState<Set<string>>(new Set());
+  const [pickerTask,     setPickerTask]     = useState<NormalisedTask | null>(null);
 
-  // Reset filters when worker changes
   useEffect(() => {
     setSearch('');
     setPriorityFilter('all');
     setStatusFilter('all');
+    setPickerTask(null);
   }, [worker.id]);
 
-  // Derive which tasks are assigned to this worker from live assignments prop
   const assignedTaskIds = useMemo(
     () => new Set(assignments.filter(a => a.workerId === worker.id).map(a => a.taskId)),
-    [assignments, worker.id]
+    [assignments, worker.id],
   );
 
-  // Capacity calculations
-  const assignedTasks   = allTasks.filter(t => assignedTaskIds.has(t.id));
-  const assignedHours   = assignedTasks.reduce((s, t) => s + t.estimatedHours, 0);
-  const assignedCount   = assignedTaskIds.size;
-  const capacityHours   = worker.dailyCapacityHours * 5;
-  const capacityPct     = Math.min(100, Math.round((assignedHours / capacityHours) * 100));
+  const assignedTasks  = allTasks.filter(t => assignedTaskIds.has(t.id));
+  const assignedHours  = assignedTasks.reduce((s, t) => s + t.estimatedHours, 0);
+  const assignedCount  = assignedTaskIds.size;
+  const capacityHours  = worker.dailyCapacityHours * 5;
+  const capacityPct    = Math.min(100, Math.round((assignedHours / capacityHours) * 100));
 
   const filtered = useMemo(() => {
     let list = allTasks.filter(t => t.status !== 'done');
@@ -87,12 +256,11 @@ export default function AssignTasksPanel({
       const q = search.toLowerCase();
       list = list.filter(t =>
         t.title.toLowerCase().includes(q) ||
-        t.description.toLowerCase().includes(q)
+        t.description.toLowerCase().includes(q),
       );
     }
     if (priorityFilter !== 'all') list = list.filter(t => t.priority === priorityFilter);
     if (statusFilter   !== 'all') list = list.filter(t => t.status   === statusFilter);
-    // Assigned tasks float to top
     list.sort((a, b) => {
       const aA = assignedTaskIds.has(a.id) ? 0 : 1;
       const bA = assignedTaskIds.has(b.id) ? 0 : 1;
@@ -101,15 +269,32 @@ export default function AssignTasksPanel({
     return list;
   }, [search, priorityFilter, statusFilter, assignedTaskIds, allTasks]);
 
-  async function toggleAssign(taskId: string) {
-    if (pending.has(taskId)) return; // debounce while API in-flight
-    const nowAssigned = !assignedTaskIds.has(taskId);
+  function handleToggleClick(task: NormalisedTask) {
+    console.log('🖱️ handleToggleClick fired', { taskId: task.id, isAssigned: assignedTaskIds.has(task.id) });
+    if (pending.has(task.id)) return;
+    if (assignedTaskIds.has(task.id)) {
+      doAssign(task.id, false);
+    } else {
+      setPickerTask(task);
+    }
+  }
+
+  async function doAssign(taskId: string, assigned: boolean, schedule?: AssignSchedulePayload) {
+    console.log('🔥 doAssign called', { taskId, assigned, schedule });
     setPending(prev => new Set(prev).add(taskId));
     try {
-      await onAssign(taskId, nowAssigned);
+      await onAssign(taskId, assigned, schedule);
     } finally {
       setPending(prev => { const n = new Set(prev); n.delete(taskId); return n; });
     }
+  }
+
+  async function handlePickerConfirm(payload: AssignSchedulePayload) {
+    console.log('✅ handlePickerConfirm called', payload);
+    if (!pickerTask) return;
+    const taskId = pickerTask.id;
+    setPickerTask(null);
+    await doAssign(taskId, true, payload);
   }
 
   function clearFilters() {
@@ -124,16 +309,21 @@ export default function AssignTasksPanel({
 
   return (
     <>
-      {/* Backdrop */}
       <div
         className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm animate-fade-in"
         onClick={onClose}
       />
 
-      {/* Panel */}
       <div className="fixed inset-y-0 right-0 z-50 flex flex-col w-full max-w-md bg-background border-l border-border shadow-2xl animate-slide-in-right">
 
-        {/* Header */}
+        {pickerTask && (
+          <SchedulePickerModal
+            task={pickerTask}
+            onConfirm={handlePickerConfirm}
+            onCancel={() => setPickerTask(null)}
+          />
+        )}
+
         <div className="flex items-start justify-between px-5 py-4 border-b border-border/50 shrink-0">
           <div>
             <h2 className="text-base font-semibold text-foreground">Assign Tasks</h2>
@@ -147,7 +337,6 @@ export default function AssignTasksPanel({
           </button>
         </div>
 
-        {/* Capacity bar */}
         <div className="px-5 py-3 border-b border-border/50 bg-secondary/20 shrink-0">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Weekly Capacity</span>
@@ -179,7 +368,6 @@ export default function AssignTasksPanel({
           )}
         </div>
 
-        {/* Filters */}
         <div className="px-5 py-3 border-b border-border/50 space-y-2 shrink-0">
           <div className="flex items-center gap-2 bg-secondary/50 rounded-lg px-3 py-2">
             <SearchIcon size={13} className="text-muted-foreground shrink-0" />
@@ -224,7 +412,6 @@ export default function AssignTasksPanel({
           </div>
         </div>
 
-        {/* Task list */}
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center px-5">
@@ -241,6 +428,12 @@ export default function AssignTasksPanel({
               {filtered.map(task => {
                 const isAssigned = assignedTaskIds.has(task.id);
                 const isPending  = pending.has(task.id);
+                const slot = assignments.find(
+                  a => a.taskId === task.id && a.workerId === worker.id,
+                ) as (NormalisedAssignment & {
+                  date?: string; startTime?: string; endTime?: string; durationUnits?: number;
+                }) | undefined;
+
                 return (
                   <div
                     key={task.id}
@@ -249,9 +442,8 @@ export default function AssignTasksPanel({
                     }`}
                   >
                     <div className="flex items-start gap-3">
-                      {/* Assign toggle */}
                       <button
-                        onClick={() => toggleAssign(task.id)}
+                        onClick={() => handleToggleClick(task)}
                         disabled={isPending}
                         className={`mt-0.5 w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors
                           ${isPending
@@ -260,7 +452,7 @@ export default function AssignTasksPanel({
                               ? 'bg-primary border-primary'
                               : 'bg-transparent border-border hover:border-primary/50'
                           }`}
-                        title={isAssigned ? 'Unassign task' : 'Assign task'}
+                        title={isAssigned ? 'Unassign task' : 'Assign task + schedule slot'}
                       >
                         {isPending
                           ? <div className="w-2.5 h-2.5 border border-muted-foreground border-t-transparent rounded-full animate-spin" />
@@ -270,7 +462,6 @@ export default function AssignTasksPanel({
                         }
                       </button>
 
-                      {/* Task info */}
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-foreground truncate">{task.title}</p>
                         {task.description && (
@@ -284,12 +475,27 @@ export default function AssignTasksPanel({
                             {task.status.replace('_', ' ')}
                           </span>
                           <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                            <ClockIcon size={10} />{task.estimatedHours}h
+                            <ClockIcon size={10} />{task.estimatedHours}h est.
                           </span>
                           {task.dueDate && (
                             <span className="text-[10px] text-muted-foreground">Due {task.dueDate}</span>
                           )}
                         </div>
+
+                        {isAssigned && slot?.date && slot?.startTime && (
+                          <div className="flex items-center gap-1.5 mt-2 text-[10px] text-primary bg-primary/10 rounded-md px-2 py-1 w-fit">
+                            <ClockIcon size={9} />
+                            <span className="font-medium">{slot.date}</span>
+                            <span className="text-primary/60">·</span>
+                            <span>{slot.startTime}{slot.endTime ? ` → ${slot.endTime}` : ''}</span>
+                            {slot.durationUnits != null && (
+                              <>
+                                <span className="text-primary/60">·</span>
+                                <span>{formatDuration(slot.durationUnits)}</span>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -299,7 +505,6 @@ export default function AssignTasksPanel({
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-5 py-4 border-t border-border/50 shrink-0 flex items-center justify-between gap-3">
           <p className="text-[11px] text-muted-foreground">
             {assignedCount} task{assignedCount !== 1 ? 's' : ''} assigned · {assignedHours}h total
@@ -311,7 +516,6 @@ export default function AssignTasksPanel({
             Done
           </button>
         </div>
-
       </div>
     </>
   );

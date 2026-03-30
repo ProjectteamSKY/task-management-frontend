@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { taskService } from '@/services/taskService';
 import { assignmentService } from '@/services/taskassignmentService';
 import { workerService, type NormalisedWorker } from '@/services/workerService';
+import { createScheduleSlot, deleteScheduleSlot } from '@/services/scheduleService';
 import { ClockIcon, AlertIcon, CheckIcon, ChevronDownIcon } from '@/components/icons/Icons';
-import AssignTasksPanel from '@/components/workers/AssignTasksPanel';
+import AssignTasksPanel, { type AssignSchedulePayload } from '@/components/workers/AssignTasksPanel';
 
 const priorityStyles: Record<string, string> = {
   critical: 'bg-destructive/15 text-destructive border border-destructive/20',
@@ -38,41 +39,49 @@ function normaliseTask(t: any) {
 }
 
 export interface NormalisedAssignment {
-  assignmentId:   number;
-  taskId:         string;
-  workerId:       string;
-  allocatedHours: number;
+  assignmentId:    number;
+  taskId:          string;
+  workerId:        string;
+  allocatedHours:  number;
+  scheduleSlotId?: string;
+  date?:           string;
+  startTime?:      string;
+  endTime?:        string;
+  durationUnits?:  number;
 }
 
 function normaliseAssignment(a: any): NormalisedAssignment {
+  const trimTime = (t: string | null | undefined) =>
+    t ? t.slice(0, 5) : undefined;
   return {
     assignmentId:   a.id ?? a.assignment_id,
     taskId:         String(a.task_id ?? a.task?.id),
     workerId:       String(a.worker_id ?? a.worker?.id),
     allocatedHours: a.allocated_hours ?? 0,
+    scheduleSlotId: a.schedule_slot_id ? String(a.schedule_slot_id) : undefined,
+    date:           a.start_date   ?? undefined,
+    startTime:      trimTime(a.start_time),
+    endTime:        trimTime(a.end_time),
+    durationUnits:  a.duration_units ?? undefined,
   };
 }
 
-export default function MemberTasks() {
+export default function MembersTask() {
   const [filter,        setFilter]        = useState<Filter>('all');
   const [focusedWorker, setFocusedWorker] = useState<string | null>(null);
   const [expanded,      setExpanded]      = useState<Record<string, boolean>>({});
 
-  // ── Workers state ─────────────────────────────────────────────────
   const [workers,        setWorkers]        = useState<NormalisedWorker[]>([]);
   const [workersLoading, setWorkersLoading] = useState(true);
   const [workersError,   setWorkersError]   = useState<string | null>(null);
 
-  // ── Tasks state ───────────────────────────────────────────────────
   const [localTasks,   setLocalTasks]   = useState<ReturnType<typeof normaliseTask>[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError,   setTasksError]   = useState<string | null>(null);
 
-  // ── Assignments state ─────────────────────────────────────────────
   const [assignments,        setAssignments]        = useState<NormalisedAssignment[]>([]);
   const [assignmentsLoading, setAssignmentsLoading] = useState(true);
 
-  // ── Panel state ───────────────────────────────────────────────────
   const [panelOpen,     setPanelOpen]     = useState(false);
   const [panelWorkerId, setPanelWorkerId] = useState<string | null>(null);
 
@@ -80,14 +89,12 @@ export default function MemberTasks() {
     taskId: string; fromWorkerId: string; picked: string | null;
   } | null>(null);
 
-  // ── Fetches ───────────────────────────────────────────────────────
   useEffect(() => {
     setWorkersLoading(true);
     workerService.getWorkers()
       .then(data => {
         setWorkers(data);
-        // Default all expanded
-        setExpanded(Object.fromEntries(data.map(w => [w.id, true])));
+        setExpanded(Object.fromEntries(data.map((w: NormalisedWorker) => [w.id, true])));
         setWorkersError(null);
       })
       .catch((err: Error) => setWorkersError(err.message))
@@ -110,7 +117,6 @@ export default function MemberTasks() {
       .finally(() => setAssignmentsLoading(false));
   }, []);
 
-  // ── Helpers ───────────────────────────────────────────────────────
   const getWorkerTasks = (wid: string) =>
     assignments
       .filter(a => a.workerId === wid)
@@ -142,7 +148,6 @@ export default function MemberTasks() {
     return 'low';
   };
 
-  // ── Actions ───────────────────────────────────────────────────────
   const handleChangeStatus = async (taskId: string, status: string) => {
     setLocalTasks(prev => prev.map(t => t.id === taskId ? { ...t, status } : t));
     try {
@@ -154,37 +159,72 @@ export default function MemberTasks() {
     }
   };
 
- const handlePanelAssign = async (taskId: string, assigned: boolean) => {
-  if (!panelWorkerId) return;
+  const handlePanelAssign = async (
+    taskId: string,
+    assigned: boolean,
+    schedule?: AssignSchedulePayload,
+  ) => {
+    console.log('🔥 handlePanelAssign called', { taskId, assigned, schedule, panelWorkerId });
 
-  if (assigned) {
-    const task = localTasks.find(t => t.id === taskId);
-    try {
-      const created = await assignmentService.createAssignment({
-        task_id:         Number(taskId),
-        worker_id:       Number(panelWorkerId),
-        allocated_hours: task?.estimatedHours ?? 0,
-        assigned_date:   new Date().toISOString().split('T')[0],
-        status:          'pending',
-      });
-      // Optimistic update — panel re-renders immediately
-      setAssignments(prev => [...prev, normaliseAssignment(created)]);
-    } catch {
-      // silently fail — panel shows previous state
+    if (!panelWorkerId) {
+      console.warn('⚠️ panelWorkerId is null, aborting');
+      return;
     }
-  } else {
-    const existing = assignments.find(
-      a => a.taskId === taskId && a.workerId === panelWorkerId
-    );
-    if (!existing) return;
-    try {
-      await assignmentService.deleteAssignment(existing.assignmentId);
-      setAssignments(prev =>
-        prev.filter(a => a.assignmentId !== existing.assignmentId)
+
+    if (assigned && schedule) {
+      try {
+        console.log('1️⃣ creating assignment...');
+        const created = await assignmentService.createAssignment({
+          task_id:         Number(taskId),
+          worker_id:       Number(panelWorkerId),
+          allocated_hours: schedule.durationUnits / 2,
+          status:          'pending',
+          start_date:      schedule.date,
+          end_date:        schedule.date,
+          start_time:      schedule.startTime,
+          end_time:        schedule.endTime,
+          duration_units:  schedule.durationUnits,
+        });
+        console.log('2️⃣ assignment created:', created);
+
+        console.log('3️⃣ creating schedule slot...');
+        const slot = await createScheduleSlot({
+          worker_id:      Number(panelWorkerId),
+          task_id:        Number(taskId),
+          date:           schedule.date,
+          start_time:     schedule.startTime,
+          end_time:       schedule.endTime,
+          duration_units: schedule.durationUnits,
+          status:         'allocated',
+        });
+        console.log('4️⃣ slot created:', slot);
+
+        setAssignments(prev => [
+          ...prev,
+          { ...normaliseAssignment(created), scheduleSlotId: slot.id },
+        ]);
+      } catch (err) {
+        console.error('❌ handlePanelAssign failed:', err);
+      }
+
+    } else if (!assigned) {
+      const existing = assignments.find(
+        a => a.taskId === taskId && a.workerId === panelWorkerId,
       );
-    } catch {}
-  }
-};
+      if (!existing) return;
+      try {
+        await assignmentService.deleteAssignment(existing.assignmentId);
+        if (existing.scheduleSlotId) {
+          await deleteScheduleSlot(existing.scheduleSlotId);
+        }
+        setAssignments(prev =>
+          prev.filter(a => a.assignmentId !== existing.assignmentId),
+        );
+      } catch (err) {
+        console.error('Failed to delete assignment/schedule slot:', err);
+      }
+    }
+  };
 
   const handleRemove = async (taskId: string, workerId: string) => {
     const existing = assignments.find(a => a.taskId === taskId && a.workerId === workerId);
@@ -192,6 +232,9 @@ export default function MemberTasks() {
     setAssignments(prev => prev.filter(a => a.assignmentId !== existing.assignmentId));
     try {
       await assignmentService.deleteAssignment(existing.assignmentId);
+      if (existing.scheduleSlotId) {
+        await deleteScheduleSlot(existing.scheduleSlotId);
+      }
     } catch {
       setAssignments(prev => [...prev, existing]);
     }
@@ -206,39 +249,42 @@ export default function MemberTasks() {
     const task = localTasks.find(t => t.id === taskId);
     setAssignments(prev =>
       prev.map(a =>
-        a.assignmentId === existing.assignmentId ? { ...a, workerId: picked } : a
-      )
+        a.assignmentId === existing.assignmentId ? { ...a, workerId: picked } : a,
+      ),
     );
     setReassigning(null);
 
     try {
       await assignmentService.deleteAssignment(existing.assignmentId);
+      if (existing.scheduleSlotId) {
+        await deleteScheduleSlot(existing.scheduleSlotId);
+      }
       const created = await assignmentService.createAssignment({
         task_id:         Number(taskId),
         worker_id:       Number(picked),
         allocated_hours: task?.estimatedHours ?? 0,
-        assigned_date:   new Date().toISOString().split('T')[0],
+        start_date:      new Date().toISOString().split('T')[0],
+        end_date:        new Date().toISOString().split('T')[0],
         status:          'pending',
       });
       setAssignments(prev =>
         prev.map(a =>
           a.workerId === picked && a.taskId === taskId && a.assignmentId === existing.assignmentId
             ? normaliseAssignment(created)
-            : a
-        )
+            : a,
+        ),
       );
     } catch {
       setAssignments(prev =>
         prev.map(a =>
           a.workerId === picked && a.taskId === taskId
             ? { ...a, workerId: fromWorkerId, assignmentId: existing.assignmentId }
-            : a
-        )
+            : a,
+        ),
       );
     }
   };
 
-  // ── Filtered workers ──────────────────────────────────────────────
   let visibleWorkers = workers;
   if (focusedWorker) {
     visibleWorkers = workers.filter(w => w.id === focusedWorker);
@@ -246,13 +292,11 @@ export default function MemberTasks() {
     visibleWorkers = workers.filter(w => w.status === 'active');
   } else if (filter === 'atrisk') {
     visibleWorkers = workers.filter(w =>
-      getWorkerTasks(w.id).some(t => getDeadlineRisk(t, w.id) === 'high')
+      getWorkerTasks(w.id).some(t => getDeadlineRisk(t, w.id) === 'high'),
     );
   }
 
   const panelWorker = workers.find(w => w.id === panelWorkerId);
-
-  // ── Loading / error ───────────────────────────────────────────────
   const isLoading = workersLoading || tasksLoading || assignmentsLoading;
 
   if (isLoading) {
@@ -288,7 +332,6 @@ export default function MemberTasks() {
   return (
     <div className="flex flex-col h-[calc(100vh-64px)] overflow-hidden animate-fade-in">
 
-      {/* ── Top bar ── */}
       <div className="px-6 py-4 border-b border-border flex items-center justify-between shrink-0">
         <h1 className="text-base font-semibold text-foreground">Member Tasks</h1>
         <div className="flex items-center gap-1.5">
@@ -307,24 +350,18 @@ export default function MemberTasks() {
         </div>
       </div>
 
-      {/* ── Worker avatar strip ── */}
       <div className="px-6 py-3 border-b border-border shrink-0">
         <div className="flex items-center justify-evenly w-full">
-
-          {/* "All" chip */}
           <button
             onClick={() => setFocusedWorker(null)}
             className={`flex flex-col items-center gap-1 px-1.5 py-1.5 rounded-xl border transition-colors flex-1
               ${!focusedWorker ? 'border-primary/40 bg-primary/10' : 'border-transparent hover:bg-secondary/60'}`}
           >
-            <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center text-[11px] font-semibold text-muted-foreground">
-              All
-            </div>
+            <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center text-[11px] font-semibold text-muted-foreground">All</div>
             <span className="text-[10px] font-medium text-foreground">All</span>
             <span className="text-[10px] text-muted-foreground">{workers.length}</span>
           </button>
 
-          {/* Worker chips */}
           {workers.map(w => {
             const wt        = getWorkerTasks(w.id);
             const pct       = getWorkloadPct(w.id);
@@ -361,20 +398,18 @@ export default function MemberTasks() {
         </div>
       </div>
 
-      {/* ── Worker rows ── */}
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3">
         {visibleWorkers.map(w => {
-          const wt         = getWorkerTasks(w.id);
-          const atRisk     = wt.filter(t => getDeadlineRisk(t, w.id) === 'high').length;
-          const totalHrs   = wt.reduce((s, t) => s + t.estimatedHours, 0);
-          const pct        = getWorkloadPct(w.id);
-          const isExpanded = expanded[w.id] ?? true;
+          const wt           = getWorkerTasks(w.id);
+          const atRisk       = wt.filter(t => getDeadlineRisk(t, w.id) === 'high').length;
+          const totalHrs     = wt.reduce((s, t) => s + t.estimatedHours, 0);
+          const pct          = getWorkloadPct(w.id);
+          const isExpanded   = expanded[w.id] ?? true;
           const otherWorkers = workers.filter(x => x.id !== w.id && x.status === 'active');
 
           return (
             <div key={w.id} className="rounded-xl border border-border overflow-hidden bg-secondary/5">
 
-              {/* Worker header */}
               <div
                 className="flex items-center gap-3 px-5 py-3 cursor-pointer hover:bg-secondary/30 transition-colors border-b border-border bg-secondary/20"
                 onClick={() => setExpanded(prev => ({ ...prev, [w.id]: !isExpanded }))}
@@ -386,17 +421,13 @@ export default function MemberTasks() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-foreground">{w.name}</span>
                     {w.status !== 'active' && (
-                      <span className="text-[10px] bg-warning/15 text-warning px-2 py-0.5 rounded-full font-medium">
-                        {w.status}
-                      </span>
+                      <span className="text-[10px] bg-warning/15 text-warning px-2 py-0.5 rounded-full font-medium">{w.status}</span>
                     )}
                   </div>
                   <p className="text-[11px] text-muted-foreground">{w.role} · {w.department}</p>
                 </div>
                 <div className="flex items-center gap-2.5 shrink-0">
-                  <span className="text-[11px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">
-                    {wt.length} tasks
-                  </span>
+                  <span className="text-[11px] bg-primary/10 text-primary px-2.5 py-1 rounded-full font-medium">{wt.length} tasks</span>
                   <span className="text-[11px] text-muted-foreground px-2 py-1 rounded-full bg-secondary">
                     <ClockIcon size={11} className="inline mr-0.5" />{totalHrs}h
                   </span>
@@ -406,8 +437,8 @@ export default function MemberTasks() {
                     </span>
                   ) : (
                     <span className="text-[11px] bg-success/10 text-success px-2.5 py-1 rounded-full">
-  <CheckIcon size={10} className="inline mr-0.5" />No Risk
-</span>
+                      <CheckIcon size={10} className="inline mr-0.5" />No Risk
+                    </span>
                   )}
                   <div className="flex items-center gap-1.5">
                     <div className="w-16 h-1.5 rounded-full bg-border overflow-hidden">
@@ -417,10 +448,7 @@ export default function MemberTasks() {
                   </div>
                   <button
                     onClick={e => { e.stopPropagation(); setPanelWorkerId(w.id); setPanelOpen(true); }}
-                   className={`text-[11px] font-medium px-3 py-1.5 rounded-lg border transition-colors
-  ${panelWorkerId === w.id && panelOpen
-    ? 'border-primary bg-primary text-primary-foreground'
-    : 'border-primary bg-primary text-primary-foreground hover:opacity-90'}`}
+                    className="text-[11px] font-medium px-3 py-1.5 rounded-lg border border-primary bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
                   >
                     + Assign
                   </button>
@@ -431,7 +459,6 @@ export default function MemberTasks() {
                 </div>
               </div>
 
-              {/* Expanded body */}
               {isExpanded && (
                 <>
                   {wt.length === 0 ? (
@@ -451,8 +478,9 @@ export default function MemberTasks() {
                       </div>
 
                       {wt.map(task => {
-                        const risk = getDeadlineRisk(task, w.id);
+                        const risk           = getDeadlineRisk(task, w.id);
                         const isThisReassign = reassigning?.taskId === task.id && reassigning.fromWorkerId === w.id;
+                        const slot           = assignments.find(a => a.taskId === task.id && a.workerId === w.id);
 
                         return (
                           <div key={task.id}>
@@ -462,6 +490,18 @@ export default function MemberTasks() {
                                 <p className="text-[11px] text-muted-foreground mt-0.5">
                                   {task.dueDate ? `Due ${task.dueDate}` : 'No due date'}
                                 </p>
+                                {slot?.date && slot?.startTime ? (
+                                  <div className="flex items-center gap-1 mt-1.5 text-[10px] text-primary bg-primary/8 rounded px-1.5 py-0.5 w-fit">
+                                    <ClockIcon size={9} />
+                                    <span className="font-medium">{slot.date}</span>
+                                    <span className="opacity-50">·</span>
+                                    <span>{slot.startTime}{slot.endTime ? ` → ${slot.endTime}` : ''}</span>
+                                  </div>
+                                ) : slot && !slot.date ? (
+                                  <div className="flex items-center gap-1 mt-1.5 text-[10px] text-muted-foreground">
+                                    <ClockIcon size={9} /><span>No schedule set</span>
+                                  </div>
+                                ) : null}
                               </div>
 
                               <select
@@ -480,8 +520,7 @@ export default function MemberTasks() {
                               </span>
 
                               <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                                <ClockIcon size={12} />
-                                <span>{task.estimatedHours}h</span>
+                                <ClockIcon size={12} /><span>{task.estimatedHours}h</span>
                               </div>
 
                               {risk === 'high' ? (
@@ -566,7 +605,6 @@ export default function MemberTasks() {
         })}
       </div>
 
-      {/* Footer */}
       <div className="px-6 py-3 border-t border-border bg-secondary/20 shrink-0 flex items-center gap-4 text-xs text-muted-foreground">
         <span>
           <span className="text-foreground font-medium">{workers.length} workers</span>
@@ -577,12 +615,11 @@ export default function MemberTasks() {
         )}
         <span className="ml-auto">
           {visibleWorkers.filter(w =>
-            getWorkerTasks(w.id).some(t => getDeadlineRisk(t, w.id) === 'high')
+            getWorkerTasks(w.id).some(t => getDeadlineRisk(t, w.id) === 'high'),
           ).length} workers with at-risk tasks
         </span>
       </div>
 
-      {/* AssignTasksPanel */}
       {panelWorker && (
         <AssignTasksPanel
           open={panelOpen}

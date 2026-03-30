@@ -7,8 +7,14 @@ export interface ScheduleSlot {
   date: string;
   startTime: string;
   endTime?: string;
-  durationUnits: number;        // ← ADDED: 1 unit = 30 min (from DB duration_units)
+  durationUnits: number;
   status: 'allocated' | 'leave' | 'blocked' | 'available';
+  // Enriched fields from API join
+  workerName?: string;
+  workerRole?: string;
+  taskTitle?: string;
+  taskPriority?: string | null;
+  taskType?: string;
 }
 
 export interface Worker {
@@ -31,12 +37,11 @@ export interface ScheduleData {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-// Now counts in 30-min units and converts to hours
 export function getWorkedHours(slots: ScheduleSlot[], workerId: string, date: string): number {
   const totalUnits = slots
     .filter(s => s.workerId === workerId && s.date === date && s.status === 'allocated')
-    .reduce((sum, s) => sum + s.durationUnits, 0); // ← FIXED: sum units, not slot count
-  return totalUnits / 2; // 2 units = 1 hour
+    .reduce((sum, s) => sum + s.durationUnits, 0);
+  return totalUnits / 2;
 }
 
 export function isOnLeave(slots: ScheduleSlot[], workerId: string, date: string): boolean {
@@ -63,11 +68,17 @@ function toScheduleSlot(raw: unknown): ScheduleSlot {
     id:            String(r.id),
     workerId:      String(r.worker_id),
     taskId:        r.task_id ? String(r.task_id) : undefined,
-    date:          r.date as string,
+    date:          (r.date ?? r.start_date) as string,          // handles both column names
     startTime:     (r.start_time as string)?.slice(0, 5),
     endTime:       (r.end_time as string)?.slice(0, 5),
-    durationUnits: Number(r.duration_units ?? 2), // ← ADDED: fallback 2 = 1 hour
-    status:        r.status as ScheduleSlot['status'],
+    durationUnits: Number(r.duration_units ?? 2),
+    status:        (r.status as ScheduleSlot['status']) ?? 'allocated',
+    // Enriched join fields
+    workerName:    r.worker_name as string | undefined,
+    workerRole:    r.worker_role as string | undefined,
+    taskTitle:     r.task_title as string | undefined,
+    taskPriority:  r.task_priority as string | null | undefined,
+    taskType:      r.task_type as string | undefined,
   };
 }
 
@@ -112,4 +123,46 @@ export async function fetchScheduleData(): Promise<ScheduleData> {
     workers: workersRaw.map(toWorker),
     tasks:   tasksRaw.map(toTask),
   };
+}
+
+// ── Mutations ─────────────────────────────────────────────────────────────────
+
+export interface CreateScheduleSlotPayload {
+  worker_id:      number;
+  task_id:        number;
+  date:           string;
+  start_time:     string;
+  end_time:       string;
+  duration_units: number;
+  status?:        string;
+}
+
+export async function createScheduleSlot(
+  payload: CreateScheduleSlotPayload,
+): Promise<ScheduleSlot> {
+  const fd = new FormData();
+  fd.append('worker_id',  String(payload.worker_id));
+  fd.append('task_id',    String(payload.task_id));
+  fd.append('date',       payload.date);
+  fd.append('start_time', payload.start_time);
+  fd.append('end_time',   payload.end_time);
+  fd.append('status',     payload.status ?? 'allocated');
+  // duration_units intentionally omitted — backend doesn't accept it
+
+  const res = await fetch(`${API_BASE}/schedule/`, {
+    method: 'POST',
+    body:   fd,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    console.error('Schedule 422 detail:', JSON.stringify(err?.detail, null, 2));
+    throw new Error(`Schedule slot creation failed: ${res.status}`);
+  }
+  return toScheduleSlot(await res.json());
+}
+export async function deleteScheduleSlot(slotId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/schedule/${slotId}/`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Schedule slot deletion failed: ${res.status}`);
 }

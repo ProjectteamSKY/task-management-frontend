@@ -1,5 +1,17 @@
 const BASE_URL = `${import.meta.env.VITE_API_BASE_URL}/assignments`;
 
+export interface AssignmentCreatePayload {
+  task_id:         number;
+  worker_id:       number;
+  allocated_hours: number;
+  status?:         string;
+  start_date:      string;
+  end_date:        string;
+  start_time:      string;
+  end_time:        string;
+  duration_units:  number;
+}
+
 function toFormData(data: Record<string, any>): FormData {
   const fd = new FormData();
   Object.entries(data).forEach(([key, val]) => {
@@ -10,14 +22,6 @@ function toFormData(data: Record<string, any>): FormData {
   return fd;
 }
 
-export interface AssignmentCreatePayload {
-  task_id: number;
-  worker_id: number;
-  allocated_hours: number;
-  assigned_date: string;
-  status?: string;
-}
-
 export const assignmentService = {
   // POST /assignments/
   async createAssignment(data: AssignmentCreatePayload) {
@@ -25,7 +29,11 @@ export const assignmentService = {
       method: 'POST',
       body: toFormData(data as Record<string, any>),
     });
-    if (!res.ok) throw new Error('Failed to create assignment');
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      console.error('422 detail:', JSON.stringify(err?.detail, null, 2));
+      throw new Error('Failed to create assignment');
+    }
     return res.json();
   },
 
