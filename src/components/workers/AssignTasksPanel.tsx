@@ -23,6 +23,7 @@ export interface AssignSchedulePayload {
 interface AssignTasksPanelProps {
   open:        boolean;
   worker:      { id: string; name: string; dailyCapacityHours: number };
+  workers?:    { id: string; name: string }[];   // all workers — for showing assignee names
   assignments: NormalisedAssignment[];
   allTasks:    NormalisedTask[];
   onClose:     () => void;
@@ -73,14 +74,18 @@ function formatDuration(units: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+// ── Schedule Picker Modal ─────────────────────────────────────────────────────
+
 function SchedulePickerModal({
   task,
+  maxDurationUnits,
   onConfirm,
   onCancel,
 }: {
-  task:      NormalisedTask;
-  onConfirm: (payload: AssignSchedulePayload) => void;
-  onCancel:  () => void;
+  task:             NormalisedTask;
+  maxDurationUnits: number;       // cap — remaining allocatable units
+  onConfirm:        (payload: AssignSchedulePayload) => void;
+  onCancel:         () => void;
 }) {
   const today = new Date().toISOString().split('T')[0];
 
@@ -91,6 +96,8 @@ function SchedulePickerModal({
 
   const durationUnits = calcDurationUnits(startTime, endTime);
   const durationLabel = formatDuration(durationUnits);
+  const maxLabel      = formatDuration(maxDurationUnits);
+  const exceedsCap    = maxDurationUnits > 0 && durationUnits > maxDurationUnits;
 
   function handleStartChange(val: string) {
     setStartTime(val);
@@ -103,14 +110,23 @@ function SchedulePickerModal({
   }
 
   function handleConfirm() {
-    if (!date)              { setError('Please select a date.');             return; }
+    if (!date)              { setError('Please select a date.');              return; }
     if (durationUnits <= 0) { setError('End time must be after start time.'); return; }
+    if (exceedsCap)         { setError(`Max assignable is ${maxLabel}.`);     return; }
     const payload: AssignSchedulePayload = { date, startTime, endTime, durationUnits };
     console.log('📅 SchedulePickerModal confirmed payload:', payload);
     onConfirm(payload);
   }
 
-  const endTimeOptions = TIME_SLOTS.filter(t => toMinutes(t) > toMinutes(startTime));
+  // Filter end times to not exceed the remaining cap
+  const endTimeOptions = TIME_SLOTS.filter(t => {
+    if (toMinutes(t) <= toMinutes(startTime)) return false;
+    if (maxDurationUnits > 0) {
+      const units = calcDurationUnits(startTime, t);
+      return units <= maxDurationUnits;
+    }
+    return true;
+  });
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -121,10 +137,21 @@ function SchedulePickerModal({
           {task.title}
         </p>
 
+        {/* Remaining hours banner */}
+        {maxDurationUnits > 0 && maxDurationUnits < task.estimatedHours * 2 && (
+          <div className="flex items-center gap-1.5 text-[11px] text-warning bg-warning/10 rounded-md px-2.5 py-1.5 mb-2.5">
+            <AlertIcon size={11} />
+            Only <span className="font-semibold mx-0.5">{maxLabel}</span> remaining for this task
+          </div>
+        )}
+
         {task.estimatedHours > 0 && (
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground bg-secondary rounded-md px-2.5 py-1.5 mb-2.5">
             <ClockIcon size={11} />
-            Estimated: <span className="font-medium text-foreground">{task.estimatedHours}h</span>
+            Estimated: <span className="font-medium text-foreground ml-1">{task.estimatedHours}h</span>
+            {maxDurationUnits > 0 && (
+              <span className="ml-auto text-warning font-medium">{maxLabel} left</span>
+            )}
           </div>
         )}
 
@@ -179,13 +206,24 @@ function SchedulePickerModal({
           </div>
 
           <div className={`flex items-center justify-between text-[11px] rounded-md px-2.5 py-1.5 ${
-            durationUnits > 0 ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'
+            exceedsCap
+              ? 'bg-destructive/10 text-destructive'
+              : durationUnits > 0
+                ? 'bg-primary/10 text-primary'
+                : 'bg-secondary text-muted-foreground'
           }`}>
             <span>Duration</span>
             <span className="font-semibold">{durationLabel} · {durationUnits} unit{durationUnits !== 1 ? 's' : ''}</span>
           </div>
 
-          {task.estimatedHours > 0 && durationUnits / 2 > task.estimatedHours && (
+          {exceedsCap && (
+            <div className="flex items-center gap-1.5 text-[11px] text-destructive bg-destructive/10 rounded-md px-2.5 py-1.5">
+              <AlertIcon size={11} />
+              Exceeds remaining {maxLabel} for this task
+            </div>
+          )}
+
+          {!exceedsCap && task.estimatedHours > 0 && durationUnits / 2 > task.estimatedHours && (
             <div className="flex items-center gap-1.5 text-[11px] text-warning bg-warning/10 rounded-md px-2.5 py-1.5">
               <AlertIcon size={11} />
               Slot exceeds estimated {task.estimatedHours}h
@@ -208,7 +246,8 @@ function SchedulePickerModal({
           </button>
           <button
             onClick={handleConfirm}
-            className="flex-1 h-8 rounded-lg gradient-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity"
+            disabled={exceedsCap}
+            className="flex-1 h-8 rounded-lg gradient-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Assign &amp; Schedule
           </button>
@@ -218,9 +257,12 @@ function SchedulePickerModal({
   );
 }
 
+// ── Main Panel ────────────────────────────────────────────────────────────────
+
 export default function AssignTasksPanel({
   open,
   worker,
+  workers = [],
   assignments,
   allTasks,
   onClose,
@@ -250,24 +292,61 @@ export default function AssignTasksPanel({
   const capacityHours  = worker.dailyCapacityHours * 5;
   const capacityPct    = Math.min(100, Math.round((assignedHours / capacityHours) * 100));
 
-  const filtered = useMemo(() => {
-    let list = allTasks.filter(t => t.status !== 'done');
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter(t =>
-        t.title.toLowerCase().includes(q) ||
-        t.description.toLowerCase().includes(q),
-      );
+  // Build a worker id → name map for quick lookup
+  const workerNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    workers.forEach(w => { map[w.id] = w.name; });
+    return map;
+  }, [workers]);
+
+  // For a given task, get all OTHER workers it's already assigned to + their allocated hours
+function getExistingAssignees(taskId: string) {
+  return assignments
+    .filter(a => a.taskId === taskId && a.workerId !== worker.id)
+    .map(a => ({
+      workerId:       a.workerId,
+      workerName:     workerNameMap[a.workerId] ?? `Unknown (${a.workerId})`, // 👈 better fallback
+      allocatedHours: (a as any).allocatedHours ?? 0,
+    }));
+}
+
+  // Remaining hours for a task = estimatedHours - sum of all other workers' allocatedHours
+  function getRemainingUnits(task: NormalisedTask): number {
+    const otherAllocated = assignments
+      .filter(a => a.taskId === task.id && a.workerId !== worker.id)
+      .reduce((sum, a) => sum + ((a as any).allocatedHours ?? 0), 0);
+    const remaining = task.estimatedHours - otherAllocated;
+    return Math.max(0, Math.round(remaining * 2)); // convert hours → 30-min units
+  }
+
+const filtered = useMemo(() => {
+  let list = allTasks.filter(t => {
+    if (t.status === 'done') return false;
+    if (assignedTaskIds.has(t.id)) return false; // already assigned to this worker
+
+    // Also hide tasks fully allocated by other workers
+    if (t.estimatedHours > 0) {
+      const otherAllocated = assignments
+        .filter(a => a.taskId === t.id && a.workerId !== worker.id)
+        .reduce((sum, a) => sum + ((a as any).allocatedHours ?? 0), 0);
+      const remainingUnits = Math.max(0, Math.round((t.estimatedHours - otherAllocated) * 2));
+      if (remainingUnits === 0) return false;
     }
-    if (priorityFilter !== 'all') list = list.filter(t => t.priority === priorityFilter);
-    if (statusFilter   !== 'all') list = list.filter(t => t.status   === statusFilter);
-    list.sort((a, b) => {
-      const aA = assignedTaskIds.has(a.id) ? 0 : 1;
-      const bA = assignedTaskIds.has(b.id) ? 0 : 1;
-      return aA - bA;
-    });
-    return list;
-  }, [search, priorityFilter, statusFilter, assignedTaskIds, allTasks]);
+
+    return true;
+  });
+
+  if (search.trim()) {
+    const q = search.toLowerCase();
+    list = list.filter(t =>
+      t.title.toLowerCase().includes(q) ||
+      t.description.toLowerCase().includes(q),
+    );
+  }
+  if (priorityFilter !== 'all') list = list.filter(t => t.priority === priorityFilter);
+  if (statusFilter   !== 'all') list = list.filter(t => t.status   === statusFilter);
+  return list;
+}, [search, priorityFilter, statusFilter, assignedTaskIds, allTasks, assignments, worker.id]);
 
   function handleToggleClick(task: NormalisedTask) {
     console.log('🖱️ handleToggleClick fired', { taskId: task.id, isAssigned: assignedTaskIds.has(task.id) });
@@ -319,11 +398,13 @@ export default function AssignTasksPanel({
         {pickerTask && (
           <SchedulePickerModal
             task={pickerTask}
+            maxDurationUnits={getRemainingUnits(pickerTask)}
             onConfirm={handlePickerConfirm}
             onCancel={() => setPickerTask(null)}
           />
         )}
 
+        {/* Header */}
         <div className="flex items-start justify-between px-5 py-4 border-b border-border/50 shrink-0">
           <div>
             <h2 className="text-base font-semibold text-foreground">Assign Tasks</h2>
@@ -337,6 +418,7 @@ export default function AssignTasksPanel({
           </button>
         </div>
 
+        {/* Capacity bar */}
         <div className="px-5 py-3 border-b border-border/50 bg-secondary/20 shrink-0">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Weekly Capacity</span>
@@ -368,6 +450,7 @@ export default function AssignTasksPanel({
           )}
         </div>
 
+        {/* Filters */}
         <div className="px-5 py-3 border-b border-border/50 space-y-2 shrink-0">
           <div className="flex items-center gap-2 bg-secondary/50 rounded-lg px-3 py-2">
             <SearchIcon size={13} className="text-muted-foreground shrink-0" />
@@ -412,6 +495,7 @@ export default function AssignTasksPanel({
           </div>
         </div>
 
+        {/* Task list */}
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center px-5">
@@ -426,8 +510,13 @@ export default function AssignTasksPanel({
           ) : (
             <div className="divide-y divide-border/30">
               {filtered.map(task => {
-                const isAssigned = assignedTaskIds.has(task.id);
-                const isPending  = pending.has(task.id);
+                const isAssigned  = assignedTaskIds.has(task.id);
+                const isPending   = pending.has(task.id);
+                const existingAssignees = getExistingAssignees(task.id);
+                const remainingUnits    = getRemainingUnits(task);
+                const remainingHours    = remainingUnits / 2;
+                const fullyAllocated    = task.estimatedHours > 0 && remainingUnits === 0 && !isAssigned;
+
                 const slot = assignments.find(
                   a => a.taskId === task.id && a.workerId === worker.id,
                 ) as (NormalisedAssignment & {
@@ -438,21 +527,28 @@ export default function AssignTasksPanel({
                   <div
                     key={task.id}
                     className={`px-5 py-4 transition-colors hover:bg-secondary/20 ${
-                      isAssigned ? 'bg-primary/5 border-l-2 border-l-primary' : ''
+                      isAssigned ? 'bg-primary/5 border-l-2 border-l-primary' :
+                      fullyAllocated ? 'opacity-60' : ''
                     }`}
                   >
                     <div className="flex items-start gap-3">
                       <button
-                        onClick={() => handleToggleClick(task)}
-                        disabled={isPending}
+                        onClick={() => !fullyAllocated && handleToggleClick(task)}
+                        disabled={isPending || fullyAllocated}
                         className={`mt-0.5 w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors
                           ${isPending
                             ? 'opacity-50 cursor-wait border-border'
-                            : isAssigned
-                              ? 'bg-primary border-primary'
-                              : 'bg-transparent border-border hover:border-primary/50'
+                            : fullyAllocated
+                              ? 'opacity-30 cursor-not-allowed border-border'
+                              : isAssigned
+                                ? 'bg-primary border-primary'
+                                : 'bg-transparent border-border hover:border-primary/50'
                           }`}
-                        title={isAssigned ? 'Unassign task' : 'Assign task + schedule slot'}
+                        title={
+                          fullyAllocated ? 'Fully allocated to other workers'
+                          : isAssigned   ? 'Unassign task'
+                          : 'Assign task + schedule slot'
+                        }
                       >
                         {isPending
                           ? <div className="w-2.5 h-2.5 border border-muted-foreground border-t-transparent rounded-full animate-spin" />
@@ -467,6 +563,41 @@ export default function AssignTasksPanel({
                         {task.description && (
                           <p className="text-[11px] text-muted-foreground truncate mt-0.5">{task.description}</p>
                         )}
+
+                        {/* Existing assignees */}
+                        {existingAssignees.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {existingAssignees.map(a => (
+                              <span
+                                key={a.workerId}
+                                className="flex items-center gap-1 text-[10px] bg-secondary text-muted-foreground rounded-full px-2 py-0.5"
+                                title={`${a.workerName} — ${a.allocatedHours}h allocated`}
+                              >
+                                <span className="w-3.5 h-3.5 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[8px] font-bold shrink-0">
+                                  {a.workerName.charAt(0)}
+                                </span>
+                                {a.workerName.split(' ')[0]}
+                                <span className="text-muted-foreground/60">·</span>
+                                {a.allocatedHours}h
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Remaining hours indicator */}
+                        {!isAssigned && task.estimatedHours > 0 && existingAssignees.length > 0 && (
+                          <div className={`flex items-center gap-1 mt-1.5 text-[10px] rounded px-1.5 py-0.5 w-fit ${
+                            remainingUnits === 0
+                              ? 'bg-destructive/10 text-destructive'
+                              : 'bg-warning/10 text-warning'
+                          }`}>
+                            <ClockIcon size={9} />
+                            {remainingUnits === 0
+                              ? 'Fully allocated'
+                              : `${remainingHours}h remaining`}
+                          </div>
+                        )}
+
                         <div className="flex items-center flex-wrap gap-1.5 mt-2">
                           <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${PRIORITY_STYLES[task.priority] ?? ''}`}>
                             {task.priority}
@@ -482,6 +613,7 @@ export default function AssignTasksPanel({
                           )}
                         </div>
 
+                        {/* Scheduled slot for this worker */}
                         {isAssigned && slot?.date && slot?.startTime && (
                           <div className="flex items-center gap-1.5 mt-2 text-[10px] text-primary bg-primary/10 rounded-md px-2 py-1 w-fit">
                             <ClockIcon size={9} />
@@ -505,6 +637,7 @@ export default function AssignTasksPanel({
           )}
         </div>
 
+        {/* Footer */}
         <div className="px-5 py-4 border-t border-border/50 shrink-0 flex items-center justify-between gap-3">
           <p className="text-[11px] text-muted-foreground">
             {assignedCount} task{assignedCount !== 1 ? 's' : ''} assigned · {assignedHours}h total

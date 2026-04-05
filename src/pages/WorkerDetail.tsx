@@ -450,18 +450,19 @@ if (assign && schedule) {
 
       {/* ── Assign Tasks Panel ── */}
       {isAssignOpen && (
-        <AssignTasksPanel
-          open={isAssignOpen}
-          worker={{
-            id:                 worker.id,
-            name:               worker.name,
-            dailyCapacityHours: worker.dailyCapacityHours,
-          }}
-          allTasks={allTasks}
-          assignments={assignments}
-          onClose={() => setIsAssignOpen(false)}
-          onAssign={handleAssign}
-        />
+       <AssignTasksPanel
+  open={isAssignOpen}
+  worker={{
+    id:                 worker.id,
+    name:               worker.name,
+    dailyCapacityHours: worker.dailyCapacityHours,
+  }}
+  workers={[{ id: worker.id, name: worker.name }]} 
+  allTasks={allTasks}
+  assignments={assignments}
+  onClose={() => setIsAssignOpen(false)}
+  onAssign={handleAssign}
+/>
       )}
     </div>
   );

@@ -10,6 +10,8 @@ import {
   CloseIcon,
   KPISetupIcon,
   KPIReportIcon,
+  GanttIcon,
+  
 } from '@/components/icons/Icons';
 
 // Dedicated MemberTasks icon — person + task lines + check
@@ -60,6 +62,7 @@ const navItems = [
   { label: 'Dashboard',          path: '/',                 icon: DashboardIcon },
   { label: 'Workforce Planning', path: '/planning',         icon: PlanningIcon },
   { label: 'Kanban Board',       path: '/kanban',           icon: KanbanIcon },
+  { label: 'Gantt Chart', path: '/gantt', icon: GanttIcon },
   { label: 'Workers',            path: '/workers',          icon: WorkersIcon },
    { label: 'Projects ',   path: '/projects', icon: ProjectRegistryIcon },
   { label: 'Member Tasks',       path: '/member-tasks',     icon: MemberTasksIcon },

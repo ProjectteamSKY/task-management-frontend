@@ -17,7 +17,7 @@ import MemberTasks from "./pages/MembersTask";
 import Projects from "./pages/Projects";
 import NotFound from "./pages/NotFound";
 import WorkerCompare from "./pages/Workercompare";
-
+import GanttPage from "./pages/GanttPage";
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -31,6 +31,7 @@ const App = () => (
             <Route path="/" element={<Dashboard />} />
             <Route path="/planning" element={<WorkforcePlanning />} />
             <Route path="/kanban" element={<KanbanBoard />} />
+            <Route path="/gantt" element={<GanttPage />} />
             <Route path="/workers" element={<Workers />} />
             <Route path="/workers/:id" element={<WorkerDetail />} />
             <Route path="/workers/compare" element={<WorkerCompare />} />

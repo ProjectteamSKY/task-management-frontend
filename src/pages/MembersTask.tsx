@@ -1,10 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { taskService } from '@/services/taskService';
 import { assignmentService } from '@/services/taskassignmentService';
 import { workerService, type NormalisedWorker } from '@/services/workerService';
 import { createScheduleSlot, deleteScheduleSlot } from '@/services/scheduleService';
+import {
+  workerAvailabilityService,
+} from '@/services/workerAvailability';
 import { ClockIcon, AlertIcon, CheckIcon, ChevronDownIcon } from '@/components/icons/Icons';
 import AssignTasksPanel, { type AssignSchedulePayload } from '@/components/workers/AssignTasksPanel';
+import LeaveApprovalsDialog, { type LeaveWithWorker } from '@/modal/LeaveApproval';
+
+// ─── Style maps ───────────────────────────────────────────────────────────────
 
 const priorityStyles: Record<string, string> = {
   critical: 'bg-destructive/15 text-destructive border border-destructive/20',
@@ -21,7 +27,11 @@ const statusStyles: Record<string, string> = {
   done:        'bg-success/15 text-success',
 };
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 type Filter = 'all' | 'active' | 'atrisk';
+
+// ─── Normalisers ──────────────────────────────────────────────────────────────
 
 function normaliseTask(t: any) {
   return {
@@ -66,6 +76,8 @@ function normaliseAssignment(a: any): NormalisedAssignment {
   };
 }
 
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export default function MembersTask() {
   const [filter,        setFilter]        = useState<Filter>('all');
   const [focusedWorker, setFocusedWorker] = useState<string | null>(null);
@@ -82,12 +94,20 @@ export default function MembersTask() {
   const [assignments,        setAssignments]        = useState<NormalisedAssignment[]>([]);
   const [assignmentsLoading, setAssignmentsLoading] = useState(true);
 
+  // Leave approval state
+  const [allLeaves,     setAllLeaves]     = useState<LeaveWithWorker[]>([]);
+  const [leavesLoading, setLeavesLoading] = useState(false);
+  const [approvingId,   setApprovingId]   = useState<number | null>(null);
+  const [approvalsOpen, setApprovalsOpen] = useState(false);
+
   const [panelOpen,     setPanelOpen]     = useState(false);
   const [panelWorkerId, setPanelWorkerId] = useState<string | null>(null);
 
   const [reassigning, setReassigning] = useState<{
     taskId: string; fromWorkerId: string; picked: string | null;
   } | null>(null);
+
+  // ── Data fetching ──────────────────────────────────────────────────────────
 
   useEffect(() => {
     setWorkersLoading(true);
@@ -116,6 +136,39 @@ export default function MembersTask() {
       .catch(() => setAssignments([]))
       .finally(() => setAssignmentsLoading(false));
   }, []);
+
+  // ── Single global fetch for all leaves — no per-worker loop ───────────────
+  const fetchAllLeaves = useCallback(async (workerList: NormalisedWorker[]) => {
+    if (workerList.length === 0) return;
+    setLeavesLoading(true);
+    try {
+      const leaves = await workerAvailabilityService.getAllLeaves(); // GET /leaves — one call
+      const merged: LeaveWithWorker[] = leaves.map(l => {
+        const worker = workerList.find(w => Number(w.id) === l.worker_id);
+        return {
+          ...l,
+          workerName:   worker?.name   ?? l.worker_name ?? 'Unknown',
+          workerAvatar: worker?.avatar ?? (worker?.name?.slice(0, 2).toUpperCase() ?? '??'),
+        };
+      });
+      setAllLeaves(merged);
+    } catch (err) {
+      console.error('Failed to fetch leaves:', err);
+      setAllLeaves([]);
+    } finally {
+      setLeavesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (workers.length > 0) fetchAllLeaves(workers);
+  }, [workers, fetchAllLeaves]);
+
+  // ── Derived values ─────────────────────────────────────────────────────────
+
+  const pendingLeaves = allLeaves.filter(
+    l => !l.approval_status || l.approval_status === 'pending'
+  );
 
   const getWorkerTasks = (wid: string) =>
     assignments
@@ -148,6 +201,8 @@ export default function MembersTask() {
     return 'low';
   };
 
+  // ── Handlers ───────────────────────────────────────────────────────────────
+
   const handleChangeStatus = async (taskId: string, status: string) => {
     setLocalTasks(prev => prev.map(t => t.id === taskId ? { ...t, status } : t));
     try {
@@ -159,21 +214,51 @@ export default function MembersTask() {
     }
   };
 
+  const handleApproveLeave = async (leave: LeaveWithWorker) => {
+    setApprovingId(leave.id);
+    try {
+      await workerAvailabilityService.approveLeave(leave.worker_id, leave.id);
+      setAllLeaves(prev =>
+        prev.map(l =>
+          l.id === leave.id && l.worker_id === leave.worker_id
+            ? { ...l, approval_status: 'approved' }
+            : l
+        )
+      );
+    } catch (err) {
+      console.error('Failed to approve leave:', err);
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  const handleRejectLeave = async (leave: LeaveWithWorker) => {
+    setApprovingId(leave.id);
+    try {
+      await workerAvailabilityService.rejectLeave(leave.worker_id, leave.id);
+      setAllLeaves(prev =>
+        prev.map(l =>
+          l.id === leave.id && l.worker_id === leave.worker_id
+            ? { ...l, approval_status: 'rejected' }
+            : l
+        )
+      );
+    } catch (err) {
+      console.error('Failed to reject leave:', err);
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
   const handlePanelAssign = async (
     taskId: string,
     assigned: boolean,
     schedule?: AssignSchedulePayload,
   ) => {
-    console.log('🔥 handlePanelAssign called', { taskId, assigned, schedule, panelWorkerId });
-
-    if (!panelWorkerId) {
-      console.warn('⚠️ panelWorkerId is null, aborting');
-      return;
-    }
+    if (!panelWorkerId) return;
 
     if (assigned && schedule) {
       try {
-        console.log('1️⃣ creating assignment...');
         const created = await assignmentService.createAssignment({
           task_id:         Number(taskId),
           worker_id:       Number(panelWorkerId),
@@ -185,9 +270,6 @@ export default function MembersTask() {
           end_time:        schedule.endTime,
           duration_units:  schedule.durationUnits,
         });
-        console.log('2️⃣ assignment created:', created);
-
-        console.log('3️⃣ creating schedule slot...');
         const slot = await createScheduleSlot({
           worker_id:      Number(panelWorkerId),
           task_id:        Number(taskId),
@@ -197,16 +279,13 @@ export default function MembersTask() {
           duration_units: schedule.durationUnits,
           status:         'allocated',
         });
-        console.log('4️⃣ slot created:', slot);
-
         setAssignments(prev => [
           ...prev,
           { ...normaliseAssignment(created), scheduleSlotId: slot.id },
         ]);
       } catch (err) {
-        console.error('❌ handlePanelAssign failed:', err);
+        console.error('handlePanelAssign failed:', err);
       }
-
     } else if (!assigned) {
       const existing = assignments.find(
         a => a.taskId === taskId && a.workerId === panelWorkerId,
@@ -214,9 +293,7 @@ export default function MembersTask() {
       if (!existing) return;
       try {
         await assignmentService.deleteAssignment(existing.assignmentId);
-        if (existing.scheduleSlotId) {
-          await deleteScheduleSlot(existing.scheduleSlotId);
-        }
+        if (existing.scheduleSlotId) await deleteScheduleSlot(existing.scheduleSlotId);
         setAssignments(prev =>
           prev.filter(a => a.assignmentId !== existing.assignmentId),
         );
@@ -232,9 +309,7 @@ export default function MembersTask() {
     setAssignments(prev => prev.filter(a => a.assignmentId !== existing.assignmentId));
     try {
       await assignmentService.deleteAssignment(existing.assignmentId);
-      if (existing.scheduleSlotId) {
-        await deleteScheduleSlot(existing.scheduleSlotId);
-      }
+      if (existing.scheduleSlotId) await deleteScheduleSlot(existing.scheduleSlotId);
     } catch {
       setAssignments(prev => [...prev, existing]);
     }
@@ -256,9 +331,7 @@ export default function MembersTask() {
 
     try {
       await assignmentService.deleteAssignment(existing.assignmentId);
-      if (existing.scheduleSlotId) {
-        await deleteScheduleSlot(existing.scheduleSlotId);
-      }
+      if (existing.scheduleSlotId) await deleteScheduleSlot(existing.scheduleSlotId);
       const created = await assignmentService.createAssignment({
         task_id:         Number(taskId),
         worker_id:       Number(picked),
@@ -285,6 +358,8 @@ export default function MembersTask() {
     }
   };
 
+  // ── Visibility ─────────────────────────────────────────────────────────────
+
   let visibleWorkers = workers;
   if (focusedWorker) {
     visibleWorkers = workers.filter(w => w.id === focusedWorker);
@@ -297,7 +372,9 @@ export default function MembersTask() {
   }
 
   const panelWorker = workers.find(w => w.id === panelWorkerId);
-  const isLoading = workersLoading || tasksLoading || assignmentsLoading;
+  const isLoading   = workersLoading || tasksLoading || assignmentsLoading;
+
+  // ── Loading / error states ─────────────────────────────────────────────────
 
   if (isLoading) {
     return (
@@ -329,27 +406,59 @@ export default function MembersTask() {
     );
   }
 
+  // ── Render ─────────────────────────────────────────────────────────────────
+
   return (
     <div className="flex flex-col h-[calc(100vh-64px)] overflow-hidden animate-fade-in">
 
+      {/* ── Header ── */}
       <div className="px-6 py-4 border-b border-border flex items-center justify-between shrink-0">
         <h1 className="text-base font-semibold text-foreground">Member Tasks</h1>
-        <div className="flex items-center gap-1.5">
-          {(['all', 'active', 'atrisk'] as Filter[]).map(f => (
-            <button
-              key={f}
-              onClick={() => { setFilter(f); setFocusedWorker(null); }}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors font-medium
-                ${filter === f && !focusedWorker
-                  ? 'border-border bg-secondary text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-            >
-              {f === 'all' ? 'All workers' : f === 'active' ? 'Active' : 'At risk'}
-            </button>
-          ))}
+
+        <div className="flex items-center gap-2">
+          {/* Filter pills */}
+          <div className="flex items-center gap-1.5">
+            {(['all', 'active', 'atrisk'] as Filter[]).map(f => (
+              <button
+                key={f}
+                onClick={() => { setFilter(f); setFocusedWorker(null); }}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors font-medium
+                  ${filter === f && !focusedWorker
+                    ? 'border-border bg-secondary text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+              >
+                {f === 'all' ? 'All workers' : f === 'active' ? 'Active' : 'At risk'}
+              </button>
+            ))}
+          </div>
+
+          {/* Approvals button */}
+          <button
+            onClick={() => setApprovalsOpen(true)}
+            className="relative text-xs font-medium px-3 py-1.5 rounded-full border border-border bg-secondary text-foreground hover:bg-secondary/80 transition-colors"
+          >
+            Approvals
+            {pendingLeaves.length > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 rounded-full bg-warning text-warning-foreground text-[9px] font-semibold flex items-center justify-center px-1">
+                {pendingLeaves.length}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
+      {/* ── Leave Approvals Dialog ── */}
+      <LeaveApprovalsDialog
+        open={approvalsOpen}
+        onOpenChange={setApprovalsOpen}
+        pendingLeaves={pendingLeaves}
+        leavesLoading={leavesLoading}
+        approvingId={approvingId}
+        onApprove={handleApproveLeave}
+        onReject={handleRejectLeave}
+      />
+
+      {/* ── Worker avatar strip ── */}
       <div className="px-6 py-3 border-b border-border shrink-0">
         <div className="flex items-center justify-evenly w-full">
           <button
@@ -398,6 +507,7 @@ export default function MembersTask() {
         </div>
       </div>
 
+      {/* ── Worker cards ── */}
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-3">
         {visibleWorkers.map(w => {
           const wt           = getWorkerTasks(w.id);
@@ -410,6 +520,7 @@ export default function MembersTask() {
           return (
             <div key={w.id} className="rounded-xl border border-border overflow-hidden bg-secondary/5">
 
+              {/* Worker header row */}
               <div
                 className="flex items-center gap-3 px-5 py-3 cursor-pointer hover:bg-secondary/30 transition-colors border-b border-border bg-secondary/20"
                 onClick={() => setExpanded(prev => ({ ...prev, [w.id]: !isExpanded }))}
@@ -459,6 +570,7 @@ export default function MembersTask() {
                 </div>
               </div>
 
+              {/* Task rows */}
               {isExpanded && (
                 <>
                   {wt.length === 0 ? (
@@ -552,6 +664,7 @@ export default function MembersTask() {
                               </div>
                             </div>
 
+                            {/* Reassign panel */}
                             {isThisReassign && (
                               <div className="px-5 py-4 border-b border-border bg-secondary/30">
                                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3">Reassign to</p>
@@ -605,6 +718,7 @@ export default function MembersTask() {
         })}
       </div>
 
+      {/* ── Footer ── */}
       <div className="px-6 py-3 border-t border-border bg-secondary/20 shrink-0 flex items-center gap-4 text-xs text-muted-foreground">
         <span>
           <span className="text-foreground font-medium">{workers.length} workers</span>
@@ -613,6 +727,14 @@ export default function MembersTask() {
         {unassignedTasks.length > 0 && (
           <span className="text-warning">⚠ {unassignedTasks.length} unassigned</span>
         )}
+        {pendingLeaves.length > 0 && (
+          <span
+            className="text-warning cursor-pointer hover:underline"
+            onClick={() => setApprovalsOpen(true)}
+          >
+            📋 {pendingLeaves.length} leave{pendingLeaves.length > 1 ? 's' : ''} pending
+          </span>
+        )}
         <span className="ml-auto">
           {visibleWorkers.filter(w =>
             getWorkerTasks(w.id).some(t => getDeadlineRisk(t, w.id) === 'high'),
@@ -620,10 +742,12 @@ export default function MembersTask() {
         </span>
       </div>
 
+      {/* ── Assign panel ── */}
       {panelWorker && (
         <AssignTasksPanel
           open={panelOpen}
           worker={panelWorker}
+          workers={workers.map(w => ({ id: w.id, name: w.name }))}
           assignments={assignments}
           allTasks={localTasks}
           onClose={() => { setPanelOpen(false); setPanelWorkerId(null); }}
