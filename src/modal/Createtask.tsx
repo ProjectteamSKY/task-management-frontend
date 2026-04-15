@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { XIcon } from '@/components/icons/Icons';
-import { taskService, TaskCreatePayload } from '@/services/taskService';
+import { taskService, TaskCreatePayload, Task } from '@/services/taskService';
 import { projectService, Project } from '@/services/projectService';
 
 interface CreateTaskModalProps {
@@ -8,7 +8,7 @@ interface CreateTaskModalProps {
   onCreated?: () => void;
 }
 
-const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done', 'pending'];
+const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done', 'pending', 'blocked'];
 const PRIORITIES = ['low', 'medium', 'high', 'critical'];
 
 const defaultForm: TaskCreatePayload = {
@@ -21,6 +21,7 @@ const defaultForm: TaskCreatePayload = {
   project_id: null,
   start_date: '',
   end_date: '',
+  depends_on: [],
 };
 
 export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalProps) {
@@ -33,6 +34,10 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [projectsError, setProjectsError] = useState('');
 
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [depSearch, setDepSearch] = useState('');
+
   useEffect(() => {
     const fetchProjects = async () => {
       setProjectsLoading(true);
@@ -40,18 +45,56 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
       try {
         const data = await projectService.getProjects();
         setProjects(data);
-      } catch (err: any) {
+      } catch {
         setProjectsError('Failed to load projects');
       } finally {
         setProjectsLoading(false);
       }
     };
+
+    const fetchTasks = async () => {
+      setTasksLoading(true);
+      try {
+        const data = await taskService.getTasks();
+        setTasks(data);
+      } finally {
+        setTasksLoading(false);
+      }
+    };
+
     fetchProjects();
+    fetchTasks();
   }, []);
 
   const set = (field: keyof TaskCreatePayload, value: any) => {
     setForm(prev => ({ ...prev, [field]: value }));
     setErrors(prev => ({ ...prev, [field]: '' }));
+    setApiError('');
+  };
+
+  const toggleDependency = (taskId: number) => {
+    const already = form.depends_on.includes(taskId);
+    const newDeps = already
+      ? form.depends_on.filter(id => id !== taskId)
+      : [...form.depends_on, taskId];
+
+    const hasIncomplete = newDeps.some(id => {
+      const t = tasks.find(t => t.id === id);
+      return t && t.status !== 'done' && t.status !== 'completed';
+    });
+
+    setForm(prev => ({
+      ...prev,
+      depends_on: newDeps,
+      status: newDeps.length === 0
+        ? 'todo'
+        : hasIncomplete
+        ? 'blocked'
+        : prev.status === 'blocked'
+        ? 'todo'
+        : prev.status,
+    }));
+    setErrors(prev => ({ ...prev, depends_on: '' }));
     setApiError('');
   };
 
@@ -72,12 +115,19 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
     setLoading(true);
     setApiError('');
     try {
-      await taskService.createTask({
+      const newTask = await taskService.createTask({
         ...form,
         project_id: form.project_id || null,
         start_date: form.start_date || null,
         end_date: form.end_date || null,
       });
+
+      if (form.depends_on.length > 0) {
+        await Promise.all(
+          form.depends_on.map(dep_id => taskService.addDependency(newTask.id, dep_id))
+        );
+      }
+
       onCreated?.();
       onClose();
     } catch (err: any) {
@@ -86,6 +136,13 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
       setLoading(false);
     }
   };
+
+  const filteredTasks = tasks.filter(t =>
+    t.title.toLowerCase().includes(depSearch.toLowerCase())
+  );
+
+  const isDepIncomplete = (t: Task) =>
+    t.status !== 'done' && t.status !== 'completed';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -144,16 +201,20 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
                   <option key={s} value={s}>{s.replace('_', ' ')}</option>
                 ))}
               </select>
+              {form.status === 'blocked' && form.depends_on.length > 0 && (
+                <p className="text-[11px] text-amber-500 mt-1">
+                  ⚠ Auto-set — has incomplete dependencies
+                </p>
+              )}
             </Field>
+
             <Field label="Priority">
               <select
                 value={form.priority}
                 onChange={e => set('priority', e.target.value)}
                 className={inputCls()}
               >
-                {PRIORITIES.map(p => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
+                {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </Field>
           </div>
@@ -168,7 +229,6 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
             />
           </Field>
 
-          {/* Project Dropdown */}
           <Field label="Project" hint="optional">
             {projectsLoading ? (
               <div className={`${inputCls()} flex items-center gap-2 text-muted-foreground`}>
@@ -176,9 +236,7 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
                 <span className="text-xs">Loading projects...</span>
               </div>
             ) : projectsError ? (
-              <div className={`${inputCls(true)} text-destructive text-xs`}>
-                {projectsError}
-              </div>
+              <div className={`${inputCls(true)} text-destructive text-xs`}>{projectsError}</div>
             ) : (
               <select
                 value={form.project_id ?? ''}
@@ -186,11 +244,7 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
                 className={inputCls()}
               >
                 <option value="">— No project —</option>
-                {projects.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             )}
           </Field>
@@ -223,6 +277,88 @@ export default function CreateTaskModal({ onClose, onCreated }: CreateTaskModalP
               />
             </Field>
           </div>
+
+          {/* Depends On */}
+          <Field label="Depends On" hint="optional — task will be blocked until these are done">
+            <div className="rounded-lg border border-border bg-secondary/50 overflow-hidden">
+
+              {/* Search */}
+              <div className="px-3 py-2 border-b border-border">
+                <input
+                  type="text"
+                  value={depSearch}
+                  onChange={e => setDepSearch(e.target.value)}
+                  placeholder="Search tasks..."
+                  className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+                />
+              </div>
+
+              {/* Task list */}
+              <div className="max-h-36 overflow-y-auto scrollbar-thin">
+                {tasksLoading ? (
+                  <div className="flex items-center gap-2 px-3 py-3 text-muted-foreground">
+                    <span className="w-3 h-3 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin" />
+                    <span className="text-xs">Loading tasks...</span>
+                  </div>
+                ) : filteredTasks.length === 0 ? (
+                  <p className="text-xs text-muted-foreground px-3 py-3">No tasks found</p>
+                ) : (
+                  filteredTasks.map(t => {
+                    const selected = form.depends_on.includes(t.id);
+                    const incomplete = isDepIncomplete(t);
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => toggleDependency(t.id)}
+                        className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs transition-colors hover:bg-secondary
+                          ${selected ? 'text-primary' : 'text-foreground'}`}
+                      >
+                        <span className="truncate">{t.title}</span>
+                        <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full border shrink-0
+                          ${selected && incomplete
+                            ? 'bg-amber-500/10 border-amber-500/30 text-amber-500'
+                            : selected
+                            ? 'bg-primary/10 border-primary/30 text-primary'
+                            : 'border-border text-muted-foreground'}`}>
+                          {t.status.replace('_', ' ')}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Selected pills */}
+            {form.depends_on.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {form.depends_on.map(id => {
+                  const t = tasks.find(t => t.id === id);
+                  const incomplete = t ? isDepIncomplete(t) : false;
+                  return (
+                    <span
+                      key={id}
+                      className={`flex items-center gap-1 text-[11px] border px-2 py-0.5 rounded-full
+                        ${incomplete
+                          ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                          : 'bg-primary/10 text-primary border-primary/20'}`}
+                    >
+                      {t?.title}
+                      <button
+                        type="button"
+                        onClick={() => toggleDependency(id)}
+                        className="hover:text-destructive transition-colors"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </Field>
+
         </div>
 
         {/* Footer */}

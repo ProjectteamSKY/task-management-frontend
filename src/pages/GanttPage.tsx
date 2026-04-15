@@ -1,33 +1,23 @@
 // GanttChart.jsx
-// Install: npm install @svar-ui/react-gantt
-// Import the CSS in your main entry file: import '@svar-ui/react-gantt/all.css';
-//
-// ─── CORS FIX (FastAPI backend) ───────────────────────────────────────────────
-// Add this to your main.py BEFORE any route definitions:
-//
-//   from fastapi.middleware.cors import CORSMiddleware
-//   app.add_middleware(
-//       CORSMiddleware,
-//       allow_origins=["http://localhost:8080"],  // or ["*"] during dev
-//       allow_credentials=True,
-//       allow_methods=["*"],
-//       allow_headers=["*"],
-//   )
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Gantt, Willow } from "@svar-ui/react-gantt";
 
 import { projectService } from "@/services/projectService";
 import { taskService } from "@/services/taskService";
 
-// ─── Quarter formatter (fixes Q7 bug) ────────────────────────────────────────
+function toISODate(d) {
+  const date = new Date(d);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 const quarterFormat = (date) => {
   const d = new Date(date);
   return `Q${Math.floor(d.getMonth() / 3) + 1} ${d.getFullYear()}`;
 };
 
-// ─── Scale Presets ────────────────────────────────────────────────────────────
 const SCALE_PRESETS = {
   week: [
     { unit: "month", step: 1, format: "%F %Y" },
@@ -44,6 +34,20 @@ const SCALE_PRESETS = {
   ],
 };
 
+function statusToColor(status = "") {
+  const map = {
+    done:          "#10b981",
+    completed:     "#10b981",
+    "in-progress": "#3b82f6",
+    in_progress:   "#3b82f6",
+    active:        "#3b82f6",
+    pending:       "#94a3b8",
+    todo:          "#94a3b8",
+    blocked:       "#ef4444",
+  };
+  return map[(status ?? "").toLowerCase()] ?? "#3b82f6";
+}
+
 const columns = [
   { id: "text",     header: "Task Name", width: 220, flexgrow: 1 },
   { id: "start",    header: "Start",     width: 100, align: "center" },
@@ -58,11 +62,11 @@ const columns = [
   },
 ];
 
-// ─── ID Strategy ──────────────────────────────────────────────────────────────
 const PROJECT_ID_OFFSET = 1_000_000_000;
 const projectRowId = (rawId) => PROJECT_ID_OFFSET + Number(rawId);
+const rawProjectId  = (rowId) => rowId - PROJECT_ID_OFFSET;
+const isProjectRow  = (id)   => id >= PROJECT_ID_OFFSET;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 function statusToProgress(status = "") {
   const map = {
     done: 100, completed: 100,
@@ -83,7 +87,6 @@ function daysBetween(a, b) {
   return Number.isFinite(diff) && diff > 0 ? diff : 1;
 }
 
-// ─── Tree Builder ─────────────────────────────────────────────────────────────
 function buildGanttRows(projects, apiTasks) {
   const validProjectIds = new Set(projects.map((p) => Number(p.id)));
   const rows = [];
@@ -107,8 +110,11 @@ function buildGanttRows(projects, apiTasks) {
         end,
         duration: daysBetween(start, end),
         progress: statusToProgress(t.status),
+        color:    statusToColor(t.status),
+        status:   t.status ?? "pending",
         type:     "task",
         parent:   pRowId,
+        _raw:     t,
       };
     });
 
@@ -139,15 +145,17 @@ function buildGanttRows(projects, apiTasks) {
       end:      pEnd,
       duration: daysBetween(pStart, pEnd),
       progress: avgProgress,
+      color:    statusToColor(p.status),
+      status:   p.status ?? "pending",
       type:     "summary",
       parent:   0,
       open:     hasChildren,
+      _raw:     p,
     });
 
     rows.push(...mappedChildren);
   }
 
-  // Orphaned tasks
   for (const t of apiTasks) {
     if (t.project_id != null && validProjectIds.has(Number(t.project_id)))
       continue;
@@ -164,15 +172,89 @@ function buildGanttRows(projects, apiTasks) {
       end,
       duration: daysBetween(start, end),
       progress: statusToProgress(t.status),
+      color:    statusToColor(t.status),
+      status:   t.status ?? "pending",
       type:     "task",
       parent:   0,
+      _raw:     t,
     });
   }
 
   return rows;
 }
 
-// ─── Spinner ──────────────────────────────────────────────────────────────────
+// ── Dependency helpers ────────────────────────────────────────────────────────
+
+/**
+ * Fetch all dependencies for every leaf task in parallel.
+ * Returns SVAR-compatible link objects:
+ *   { id: string, source: number, target: number, type: 0 }
+ * where type 0 = finish-to-start (default).
+ */
+async function fetchAllLinks(taskRows) {
+  const leafIds = taskRows
+    .filter((r) => r.type === "task")
+    .map((r) => r.id);
+
+  const results = await Promise.allSettled(
+    leafIds.map((id) =>
+      taskService.getTaskDependencies(id).then((deps) =>
+        (deps ?? []).map((dep) => ({
+          // stable id: "source-target"
+          id:     `${dep.depends_on_id ?? dep.id}-${id}`,
+          source: Number(dep.depends_on_id ?? dep.id),
+          target: Number(id),
+          type:   0, // finish-to-start
+        }))
+      )
+    )
+  );
+
+  const links = [];
+  for (const r of results) {
+    if (r.status === "fulfilled") links.push(...r.value);
+  }
+
+  // Deduplicate by id
+  const seen = new Set();
+  return links.filter((l) => {
+    if (seen.has(l.id)) return false;
+    seen.add(l.id);
+    return true;
+  });
+}
+
+/**
+ * Detect cycles using DFS before persisting a new link.
+ * adjacency: Map<number, number[]>  (source → [targets])
+ */
+function wouldCreateCycle(adjacency, newSource, newTarget) {
+  // If newTarget can reach newSource, adding newSource→newTarget creates a cycle
+  const visited = new Set();
+  const stack = [newTarget];
+  while (stack.length) {
+    const node = stack.pop();
+    if (node === newSource) return true;
+    if (visited.has(node)) continue;
+    visited.add(node);
+    for (const neighbour of adjacency.get(node) ?? []) {
+      stack.push(neighbour);
+    }
+  }
+  return false;
+}
+
+function buildAdjacency(links) {
+  const map = new Map();
+  for (const l of links) {
+    if (!map.has(l.source)) map.set(l.source, []);
+    map.get(l.source).push(l.target);
+  }
+  return map;
+}
+
+// ── UI sub-components ─────────────────────────────────────────────────────────
+
 function Spinner() {
   return (
     <>
@@ -191,7 +273,37 @@ function Spinner() {
   );
 }
 
-// ─── GanttInner ───────────────────────────────────────────────────────────────
+function SaveToast({ message, type }) {
+  if (!message) return null;
+  const bg     = type === "error" ? "#fef2f2" : "#f0fdf4";
+  const color  = type === "error" ? "#dc2626" : "#16a34a";
+  const border = type === "error" ? "#fecaca" : "#bbf7d0";
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 16,
+        right: 16,
+        zIndex: 50,
+        background: bg,
+        border: `1px solid ${border}`,
+        color,
+        borderRadius: 8,
+        padding: "8px 16px",
+        fontSize: 13,
+        fontWeight: 600,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.10)",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        pointerEvents: "none",
+      }}
+    >
+      {type === "error" ? "⚠️" : "✓"} {message}
+    </div>
+  );
+}
+
 function GanttInner({ tasks, links, scales, isDark, onApiReady }) {
   return (
     <Willow theme={isDark ? "dark" : undefined}>
@@ -207,34 +319,8 @@ function GanttInner({ tasks, links, scales, isDark, onApiReady }) {
   );
 }
 
-// ─── Scroll Button Component ──────────────────────────────────────────────────
-function ScrollBtn({ dir, onClick, surface, border, textMuted }) {
-  return (
-    <button
-      onClick={onClick}
-      title={dir === "left" ? "Scroll Back" : "Scroll Forward"}
-      style={{
-        width: 36,
-        height: 36,
-        borderRadius: 8,
-        border: `1px solid ${border}`,
-        background: surface,
-        color: textMuted,
-        cursor: "pointer",
-        fontSize: 16,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        transition: "all 0.15s",
-        flexShrink: 0,
-      }}
-    >
-      {dir === "left" ? "◀" : "▶"}
-    </button>
-  );
-}
+// ── Main component ────────────────────────────────────────────────────────────
 
-// ─── Main Component ───────────────────────────────────────────────────────────
 export default function GanttChart() {
   const [tasks,   setTasks]   = useState(null);
   const [links,   setLinks]   = useState([]);
@@ -243,74 +329,131 @@ export default function GanttChart() {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
 
+  const [saveMsg,  setSaveMsg]  = useState(null);
+  const [saveType, setSaveType] = useState("success");
+  const saveTimerRef = useRef(null);
+
+  // Stable key so GanttInner re-mounts when data reloads
   const loadKey = tasks ? tasks.map((t) => t.id).join(",") : "empty";
 
-  const apiRef         = useRef(null);
-  const ganttWrapperRef = useRef(null);
+  const apiRef = useRef(null);
 
-  // ── Scroll helpers ────────────────────────────────────────────────────────
-  const scrollTimeline = useCallback((direction) => {
-    // Try multiple selectors — SVAR's internal scroll container class may vary
-    const selectors = [
-      ".wx-gantt-scroll-x",
-      ".wx-scroll-x",
-      ".gantt-scroll",
-      "[class*='gantt'] [class*='scroll']",
-      "[class*='timeline'] [class*='scroll']",
-    ];
+  const showToast = useCallback((msg, type = "success") => {
+    setSaveMsg(msg);
+    setSaveType(type);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => setSaveMsg(null), 3000);
+  }, []);
 
-    let scrollEl = null;
+  // ── Save task date changes ──────────────────────────────────────────────────
+  const saveTaskUpdate = useCallback(async (updated) => {
+    const start = toISODate(updated.start);
+    const end   = toISODate(updated.end);
 
-    // First try within the wrapper ref
-    if (ganttWrapperRef.current) {
-      for (const sel of selectors) {
-        scrollEl = ganttWrapperRef.current.querySelector(sel);
-        if (scrollEl) break;
-      }
+    if (isProjectRow(updated.id)) {
+      const pid = rawProjectId(updated.id);
+      await projectService.updateProject(pid, { start_date: start, end_date: end });
+    } else {
+      await taskService.updateTaskDates(updated.id, start, end);
+    }
+  }, []);
 
-      // Fallback: find any horizontally scrollable div inside the wrapper
-      if (!scrollEl) {
-        const allDivs = ganttWrapperRef.current.querySelectorAll("div");
-        for (const div of allDivs) {
-          if (div.scrollWidth > div.clientWidth + 10) {
-            scrollEl = div;
-            break;
-          }
+  // ── Wire Gantt events ───────────────────────────────────────────────────────
+  const handleApiReady = useCallback(
+    (api) => {
+      apiRef.current?.detach?.();
+      apiRef.current = api;
+
+      // Task drag / resize → save dates
+      api.on("update-task", async (ev) => {
+        const updated = ev.task ?? ev;
+
+        setTasks((prev) =>
+          prev?.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)) ?? prev
+        );
+
+        try {
+          await saveTaskUpdate(updated);
+          showToast("Saved", "success");
+        } catch (err) {
+          console.error("Gantt save failed:", err);
+          showToast("Save failed — reverting", "error");
+          loadData();
         }
-      }
-    }
+      });
 
-    if (scrollEl) {
-      scrollEl.scrollLeft += direction === "left" ? -300 : 300;
-    }
-  }, []);
+      // ── add-link: user draws an arrow ──────────────────────────────────────
+      api.on("add-link", async (ev) => {
+        const { source, target, type = 0 } = ev.link ?? ev;
 
-  // ── API Ready callback ────────────────────────────────────────────────────
-  const handleApiReady = useCallback((api) => {
-    apiRef.current?.detach?.();
-    apiRef.current = api;
+        // Only allow task→task links (not project summary rows)
+        if (isProjectRow(source) || isProjectRow(target)) {
+          showToast("Cannot link project summary rows", "error");
+          return;
+        }
 
-    api.on("update-task", (ev) => {
-      const updated = ev.task ?? ev;
-      setTasks((prev) =>
-        prev?.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)) ?? prev
-      );
-    });
+        // Cycle guard
+        setLinks((prev) => {
+          const adj = buildAdjacency(prev);
+          if (wouldCreateCycle(adj, Number(source), Number(target))) {
+            showToast("Circular dependency detected — link not saved", "error");
+            return prev; // reject
+          }
 
-    api.on("add-link", (ev) => {
-      setLinks((p) => [...p, { id: Date.now(), ...ev.link }]);
-    });
+          const newLink = {
+            id:     `${source}-${target}`,
+            source: Number(source),
+            target: Number(target),
+            type,
+          };
 
-    api.on("delete-link", (ev) => {
-      setLinks((p) => p.filter((l) => l.id !== (ev.id ?? ev.link?.id)));
-    });
-  }, []);
+          // Persist to backend (fire-and-forget, revert on failure)
+          taskService
+            .addDependency(Number(target), Number(source))
+            .then(() => showToast("Dependency saved", "success"))
+            .catch((err) => {
+              console.error("add-link save failed:", err);
+              showToast("Dependency save failed — reverting", "error");
+              setLinks((p) => p.filter((l) => l.id !== newLink.id));
+            });
 
-  // ── Data Fetching ─────────────────────────────────────────────────────────
+          // Deduplicate
+          if (prev.some((l) => l.id === newLink.id)) return prev;
+          return [...prev, newLink];
+        });
+      });
+
+      // ── delete-link: user removes an arrow ────────────────────────────────
+      api.on("delete-link", async (ev) => {
+        const linkId = ev.id ?? ev.link?.id;
+
+        setLinks((prev) => {
+          const target = prev.find((l) => l.id === linkId);
+          if (!target) return prev;
+
+          // Persist deletion to backend
+          taskService
+            .removeDependency(Number(target.target), Number(target.source))
+            .then(() => showToast("Dependency removed", "success"))
+            .catch((err) => {
+              console.error("delete-link save failed:", err);
+              showToast("Remove failed — reverting", "error");
+              setLinks((p) => [...p, target]); // put it back
+            });
+
+          return prev.filter((l) => l.id !== linkId);
+        });
+      });
+    },
+    [saveTaskUpdate, showToast]
+  );
+
+  // ── Load all data ───────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     setTasks(null);
+    setLinks([]);
 
     try {
       const [projects, apiTasks] = await Promise.all([
@@ -320,7 +463,15 @@ export default function GanttChart() {
 
       const rows = buildGanttRows(projects, apiTasks);
       setTasks(rows);
-      setLinks([]);
+
+      // Fetch dependencies for all leaf tasks in parallel
+      try {
+        const fetchedLinks = await fetchAllLinks(rows);
+        setLinks(fetchedLinks);
+      } catch (depErr) {
+        console.warn("Failed to load some dependencies:", depErr);
+        // Non-fatal — show chart without arrows
+      }
     } catch (err) {
       console.error("Gantt load failed:", err);
       setError(err.message ?? "Failed to load data");
@@ -330,12 +481,19 @@ export default function GanttChart() {
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-  // ── Stats ─────────────────────────────────────────────────────────────────
+  // ── Derived stats ───────────────────────────────────────────────────────────
   const allRows     = tasks ?? [];
   const projectRows = allRows.filter((r) => r.type === "summary");
   const leafTasks   = allRows.filter((r) => r.type === "task");
+
+  const doneTasks = leafTasks.filter((t) =>
+    ["done", "completed"].includes((t.status ?? "").toLowerCase())
+  ).length;
+
   const avgProgress =
     leafTasks.length > 0
       ? Math.round(
@@ -343,6 +501,14 @@ export default function GanttChart() {
         )
       : 0;
 
+  const overdueTasks = leafTasks.filter((t) => {
+    const isIncomplete = !["done", "completed"].includes(
+      (t.status ?? "").toLowerCase()
+    );
+    return isIncomplete && t.end && new Date(t.end) < new Date();
+  }).length;
+
+  // ── Theme tokens ────────────────────────────────────────────────────────────
   const isDark    = theme === "dark";
   const surface   = isDark ? "#1e2433" : "#fff";
   const border    = isDark ? "#2d3748" : "#e2e8f0";
@@ -350,7 +516,17 @@ export default function GanttChart() {
 
   const ganttReady = Array.isArray(tasks) && tasks.length > 0 && !loading;
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Dynamic height ──────────────────────────────────────────────────────────
+  // +4 rows of padding so the last task bar is never clipped
+ // ── Dynamic height ──────────────────────────────────────────────────────────
+const ROW_HEIGHT    = 44;
+const HEADER_HEIGHT = 120;
+const MIN_HEIGHT    = 400;
+const ganttHeight   = Math.max(
+  MIN_HEIGHT,
+  HEADER_HEIGHT + (allRows.length * ROW_HEIGHT) + 200
+);
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div
       style={{
@@ -362,29 +538,33 @@ export default function GanttChart() {
         boxSizing: "border-box",
       }}
     >
-      {/* ── Scrollbar style injection ── */}
-      <style>{`
-        .wx-willow-theme ::-webkit-scrollbar,
-        .wx-gantt ::-webkit-scrollbar {
-          height: 12px !important;
-          width: 8px !important;
-        }
-        .wx-willow-theme ::-webkit-scrollbar-track,
-        .wx-gantt ::-webkit-scrollbar-track {
-          background: ${isDark ? "#2d3748" : "#f1f5f9"} !important;
-          border-radius: 6px !important;
-        }
-        .wx-willow-theme ::-webkit-scrollbar-thumb,
-        .wx-gantt ::-webkit-scrollbar-thumb {
-          background: ${isDark ? "#4a5568" : "#94a3b8"} !important;
-          border-radius: 6px !important;
-          border: 2px solid ${isDark ? "#2d3748" : "#f1f5f9"} !important;
-        }
-        .wx-willow-theme ::-webkit-scrollbar-thumb:hover,
-        .wx-gantt ::-webkit-scrollbar-thumb:hover {
-          background: ${isDark ? "#718096" : "#64748b"} !important;
-        }
-      `}</style>
+<style>{`
+  .wx-willow-theme ::-webkit-scrollbar,
+  .wx-gantt ::-webkit-scrollbar {
+    height: 12px !important;
+    width: 8px !important;
+  }
+  .wx-willow-theme ::-webkit-scrollbar-track,
+  .wx-gantt ::-webkit-scrollbar-track {
+    background: ${isDark ? "#2d3748" : "#f1f5f9"} !important;
+    border-radius: 6px !important;
+  }
+  .wx-willow-theme ::-webkit-scrollbar-thumb,
+  .wx-gantt ::-webkit-scrollbar-thumb {
+    background: ${isDark ? "#4a5568" : "#94a3b8"} !important;
+    border-radius: 6px !important;
+    border: 2px solid ${isDark ? "#2d3748" : "#f1f5f9"} !important;
+  }
+  .wx-willow-theme ::-webkit-scrollbar-thumb:hover,
+  .wx-gantt ::-webkit-scrollbar-thumb:hover {
+    background: ${isDark ? "#718096" : "#64748b"} !important;
+  }
+
+  /* ↓ ADD THESE 3 LINES */
+  .wx-gantt { overflow-y: auto !important; }
+  .wx-area  { overflow-y: visible !important; }
+  .wx-bars  { overflow: visible !important; }
+`}</style>
 
       {/* ── Header ── */}
       <div
@@ -402,15 +582,20 @@ export default function GanttChart() {
             📋 Project Timeline
           </h1>
           <p style={{ margin: "4px 0 0", fontSize: 13, opacity: 0.6 }}>
-            Drag tasks to reschedule · Draw arrows to link dependencies
+            Drag tasks to reschedule · Changes auto-save · Draw arrows to link dependencies
           </p>
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {[
-            { label: "Projects",     value: projectRows.length, color: "#8b5cf6" },
-            { label: "Tasks",        value: leafTasks.length,   color: "#3b82f6" },
-            { label: "Avg Progress", value: `${avgProgress}%`,  color: "#10b981" },
+            { label: "Projects",     value: projectRows.length,    color: "#8b5cf6" },
+            { label: "Tasks",        value: leafTasks.length,      color: "#3b82f6" },
+            { label: "Done",         value: doneTasks,             color: "#10b981" },
+            { label: "Avg Progress", value: `${avgProgress}%`,    color: "#0ea5e9" },
+            { label: "Links",        value: links.length,          color: "#f59e0b" },
+            ...(overdueTasks > 0
+              ? [{ label: "Overdue", value: overdueTasks, color: "#ef4444" }]
+              : []),
           ].map(({ label, value, color }) => (
             <div
               key={label}
@@ -437,12 +622,12 @@ export default function GanttChart() {
         style={{
           display: "flex",
           gap: 8,
-          marginBottom: 16,
+          marginBottom: 12,
           flexWrap: "wrap",
           alignItems: "center",
         }}
       >
-        {/* Zoom buttons */}
+        {/* Zoom */}
         <div style={{ display: "flex", gap: 4 }}>
           {Object.keys(SCALE_PRESETS).map((level) => (
             <button
@@ -464,8 +649,6 @@ export default function GanttChart() {
             </button>
           ))}
         </div>
-
-        <div style={{ flex: 1 }} />
 
         <button
           onClick={loadData}
@@ -498,6 +681,24 @@ export default function GanttChart() {
         >
           {isDark ? "☀️ Light" : "🌙 Dark"}
         </button>
+
+        {/* Dependency legend */}
+        <div
+          style={{
+            marginLeft: "auto",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 12,
+            opacity: 0.6,
+            padding: "4px 10px",
+            border: `1px solid ${border}`,
+            borderRadius: 6,
+            background: surface,
+          }}
+        >
+         
+        </div>
       </div>
 
       {/* ── CORS hint ── */}
@@ -552,20 +753,20 @@ export default function GanttChart() {
         </div>
       )}
 
-      {/* ── Gantt wrapper ── */}
-      <div ref={ganttWrapperRef}
-        style={{
-          borderRadius: 12,
-          overflow: "hidden",
-          border: `1px solid ${border}`,
-          boxShadow: isDark
-            ? "0 4px 24px rgba(0,0,0,0.4)"
-            : "0 2px 12px rgba(0,0,0,0.06)",
-          height: 560,
-          position: "relative",
-          background: surface,
-        }}
-      >
+      {/* ── Gantt wrapper — height grows with row count ── */}
+    <div
+  style={{
+    borderRadius: 12,
+    
+    border: `1px solid ${border}`,
+    boxShadow: isDark
+      ? "0 4px 24px rgba(0,0,0,0.4)"
+      : "0 2px 12px rgba(0,0,0,0.06)",
+    height: ganttHeight,
+    position: "relative",
+    background: surface,
+  }}
+>
         {(loading || tasks === null) && (
           <div
             style={{
@@ -614,61 +815,8 @@ export default function GanttChart() {
             onApiReady={handleApiReady}
           />
         )}
-      </div>
 
-      {/* ── Bottom scroll controls ── */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 12,
-          marginTop: 14,
-        }}
-      >
-        <button
-          onClick={() => scrollTimeline("left")}
-          style={{
-            padding: "8px 20px",
-            borderRadius: 8,
-            border: `1px solid ${border}`,
-            background: surface,
-            color: textMuted,
-            cursor: "pointer",
-            fontSize: 14,
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
-          }}
-        >
-          ◀ Scroll Left
-        </button>
-
-        <span style={{ fontSize: 12, opacity: 0.4 }}>
-          scroll timeline
-        </span>
-
-        <button
-          onClick={() => scrollTimeline("right")}
-          style={{
-            padding: "8px 20px",
-            borderRadius: 8,
-            border: `1px solid ${border}`,
-            background: surface,
-            color: textMuted,
-            cursor: "pointer",
-            fontSize: 14,
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
-          }}
-        >
-          Scroll Right ▶
-        </button>
+        <SaveToast message={saveMsg} type={saveType} />
       </div>
 
       <p
@@ -679,7 +827,7 @@ export default function GanttChart() {
           textAlign: "center",
         }}
       >
-        Double-click a task bar to edit · Drag bars to reschedule · Draw arrows for dependencies
+        Double-click a task bar to edit · Drag bars to reschedule (auto-saves) · Draw arrows for dependencies · Click an arrow to delete it
       </p>
     </div>
   );
